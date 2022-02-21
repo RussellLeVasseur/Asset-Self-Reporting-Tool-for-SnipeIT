@@ -2,81 +2,94 @@ param (
     [Object]$ConfigFile=''
 )
 
-#####################################################################################################################################
-# Static Variables 
-#####################################################################################################################################
 Clear-Host;
-
+########################################################################################################################################################################################################
+# Remove Stale Variables 
+########################################################################################################################################################################################################
 Remove-Variable -Name DataHashTable -ErrorAction 'SilentlyContinue';
 Remove-Variable -Name DataObject -ErrorAction 'SilentlyContinue';
 Remove-Variable -Name Record -ErrorAction 'SilentlyContinue';
-Remove-Variable -Name StataSerial  -ErrorAction 'SilentlyContinue';
+Remove-Variable -Name EmailParams -ErrorAction 'SilentlyContinue';
+Remove-Variable -Name Config -ErrorAction 'SilentlyContinue';
 
+
+########################################################################################################################################################################################################
+# Static Variables 
+########################################################################################################################################################################################################
+If (!$ConfigFile) { Exit 1; }
+$Config = (Get-Content $ConfigFile) | ConvertFrom-Json;
+
+$EmailParams = @{
+    From=$Config.EmailParams.From;
+    To=$Config.EmailParams.To;
+    SMTPServer=$Config.EmailParams.SMTPServer;
+    port=$Config.EmailParams.Port;
+}
+
+$LogFileDir = $Config.LogFileDir;
+$RecordFileDir = $Config.RecordFileDir;
+$DellApi = $Config.DellApi;
+$Snipe = $Config.Snipe;
+$SoftwareChecklist = $Config.SoftwareChecklist;
+$DailyPowerOnList = $Config.DailyPowerOnList;
+$KeyFile = $Config.DellBios.KeyFile;
+$OldPwdFile = $Config.DellBios.OldPwdFile;
+$NewPwdFile = $Config.DellBios.NewPwdFile;
+
+$StartTime = Get-Date;
 $Today = Get-Date -UFormat "%d-%b-%Y";
-$Year = Get-Date -Format yyyy;
-$Month = Get-Date -UFormat "%m-%B";
-$LogFileDate = Get-Date -UFormat "%d-%b-%Y";
 
 $DeviceName = hostname;
-
 [HashTable]$DataHashTable = @{};
 $Win32_BIOS = Get-WMIObject -Class Win32_BIOS;
+$SerialNumber = $Win32_BIOS.SerialNumber;
+$RandomNumber = Get-Random -Minimum 1 -Maximum 120;
 
-$DataHashTable.Add('SerialNumber', $Win32_BIOS.SerialNumber);
+
+########################################################################################################################################################################################################
+# Static Variables 
+########################################################################################################################################################################################################
+$DataHashTable.Add('SerialNumber', $SerialNumber);
 $Win32_ComputerSystem = Get-WmiObject -Class Win32_ComputerSystem;
-$CsvFile = "$CsvFilePath\$($Win32_BIOS.SerialNumber).csv";
+$CsvFile = "$RecordFileDir\$($SerialNumber).csv";
 
-$LogFileDirectory = "$LogFileDirectory\$Year\$Month\$($Win32_BIOS.SerialNumber)-$($DeviceName)";
-$LogFile = "$LogFileDirectory\$($Win32_BIOS.SerialNumber)_$($DeviceName)_$($LogFileDate)_SelfReport.log";
+$DateDir = Get-Date -UFormat "%Y-%B";
+$LogFileDir = "$LogFileDir\$DateDir\$($DeviceName)";
+
+$LogFileDate = Get-Date -UFormat "%d-%b-%Y";
+$LogFile = "$LogFileDir\$($SerialNumber)_$($DeviceName)_$($LogFileDate)_SelfReport.log";
 
 $StringHasher = [System.Security.Cryptography.HashAlgorithm]::Create('sha256');
-
-Remove-Item C:\tech -Recurse -Force -ErrorAction SilentlyContinue;
-
-$EmailParams.Add('Subject', '');
-$EmailParams.Add('Body', '');
-
+$EmailParams.Add('Subject','');
+$EmailParams.Add('Body','');
 $CustomValues = @{};
 
 
-###############################################################################################################################################################################################
+########################################################################################################################################################################################################
 # Functions
-#####################################################################################################################################
-
-
-If (!(Test-Path -Path "$($LogFileDirectory)")) { New-Item -ItemType Directory -Path "$($LogFileDirectory)"; }
-If (!(Test-Path -Path $LogFile -PathType Leaf)) {
-    New-Item -ItemType "file" -Path "$LogFile" -Force;
-    Add-Content $LogFile "[$Date] Log File Created.";
-}
-
+########################################################################################################################################################################################################
 Function WriteLog {
-	param( [String] $Log, [Object[]] $Data )
+	param( [String] $File = $LogFile, [String] $Log, [Object[]] $Data )
     $Date = ((Get-Date -UFormat "%d-%b-%Y_%T") -replace ':', '-');
-    Switch -WildCard ($Log) {
-        "*success*" { Write-Host "[$Date] $Log" -f "Green"; }
-        "*ERROR*" { Write-Host "[$Date] $Log" -f "Red"; }
-        "*NEW*" { Write-Host "[$Date] $Log" -f "Yellow"; }
-        Default { Write-Host "[$Date] $Log" -f "Magenta"; }
-    }
-    If ($Data) { $Data = ($Data | Out-String).Trim().Split("`n") | ForEach-Object { Write-Host "`t$_"}; }
-    If ($Log) { Add-Content $LogFile "[$Date] $Log"; }
-    If ($Data) {
-        ($Data | Out-String).Trim().Split("`n") | ForEach-Object { Add-Content $LogFile ("`t" + "$_".Trim()) };
+    If ($LogFile) {
+        Switch -WildCard ($Log) {
+            "*success*" { Write-Host "[$Date] $Log" -f "Green"; Break; }
+            "*ERROR*" { Write-Host "[$Date] $Log" -f "Red"; Break; }
+            "*NEW*" { Write-Host "[$Date] $Log" -f "Yellow"; Break; }
+            Default { Write-Host "[$Date] $Log" -f "Magenta"; }
+        }
+        Add-Content $File "[$Date] $Log";
+        If ($Data) { ($Data | Out-String).Split("`n") | ForEach-Object { Write-Host $_; Add-Content $File (($_).Trim()); } }
     }
 }
-
 Function EmailAlert {
     param( [String] $Subject, [String] $Body )
-    $EmailParams.Subject = "$($Subject) on $($DeviceName)";
+    $EmailParams.Subject = "$($Subject) - $($DeviceName)";
     $EmailParams.Body = "Device: $($DeviceName)`n`n$($Body)";
     Send-MailMessage @EmailParams;
 }
 Function GetHRSize {
-    param(
-        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [INT64] $bytes
-    )
+    param( [INT64] $bytes )
     Process {
         If ( $bytes -gt 1pb ) { "{0:N1}PB" -f ($bytes / 1pb) }
         ElseIf ( $bytes -gt 1tb ) { "{0:N1}TB" -f ($bytes / 1tb) }
@@ -88,26 +101,54 @@ Function GetHRSize {
 }
 
 
-#####################################################################################################################################
-# Requirements 
-#####################################################################################################################################
+########################################################################################################################################################################################################
+# Create Log Files and Directories
+########################################################################################################################################################################################################
+Function CheckFilesAndDirectories  {
+    param( [Object] $Dir, [Object] $File)
+    Try {
+        $Dir | ForEach-Object { If (-NOT (Test-Path -Path $_)){ New-Item -ItemType Directory -Path $_; } }
+        $File | ForEach-Object { If (-NOT (Test-Path -Path $_ -PathType Leaf)) { New-Item -ItemType File -Path $_ -Force; } }
+    } Catch { WriteLog -Log "[ERROR] Error with Directories and Files." -Data $_; }
+}
+CheckFilesAndDirectories -Dir $LogFileDir, $RecordFileDir -File $LogFile;
 
-If (-NOT (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {
-    Write-Host "NuGet Package not found. Installing...";
-    Install-PackageProvider NuGet -Confirm:$false -Force:$true;
+
+########################################################################################################################################################################################################
+# Package Requirements 
+########################################################################################################################################################################################################
+#WriteLog -Log "Checking Required Packages...";
+'NuGet' | ForEach-Object {
+        If (-NOT (Get-PackageProvider -ListAvailable -Name $_ -ErrorAction SilentlyContinue)) {
+        WriteLog -Log "[LOG] $_ Package not found. Installing...";
+        Install-PackageProvider $_ -Confirm:$false -Force:$true;
+    } Else {
+        $Installed = [String](Get-PackageProvider -ListAvailable -Name $_ | Select-Object -First 1).Version;
+        $Latest = [String](Find-PackageProvider -Name $_ | Sort-Object Version -Descending| Select-Object -First 1).version;
+        If ([System.Version]$Latest -gt [System.Version]$Installed) {
+            WriteLog -Log "[UPDATE] Updating $_...";
+            Install-PackageProvider $_ -Confirm:$false -Force:$true;
+        }
+    }
 }
 
-If ($Win32_ComputerSystem.Model -eq "Virtual Machine") {
-    $RequiredModules = "ImportExcel", "SnipeitPS";
-} Else { $RequiredModules = "ImportExcel", "SnipeitPS", "DellBIOSProvider", "ActiveDirectory"; }
 
+########################################################################################################################################################################################################
+# Modules Requirements 
+########################################################################################################################################################################################################
+#WriteLog -Log "Checking Required Modules...";
+If ($Win32_ComputerSystem.Model -eq "Virtual Machine") {
+    $RequiredModules = 'SnipeitPS', 'PSWindowsUpdate', 'ActiveDirectory';
+} Else { 
+    $RequiredModules = 'SnipeitPS', 'DellBIOSProvider', 'ActiveDirectory', 'PSWindowsUpdate'; 
+}
 $RequiredModules | ForEach-Object {
     Try {
         $Mdle = $_;
-        WriteLog -Log "Checking for $Mdle...";
+        #WriteLog -Log "Checking for $Mdle...";
         If (!(Get-Module -ListAvailable -Name $Mdle)) {
             WriteLog -Log "$Mdle not found. Installing...";
-            If ($_ -eq 'ActiveDirectory') {
+            If ($Mdle -eq 'ActiveDirectory') {
                 Add-WindowsCapability –Online –Name “Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0”;
                 Install-WindowsFeature RSAT-AD-PowerShell;
             } Else { Install-Module -Name $Mdle -Force; }
@@ -115,70 +156,87 @@ $RequiredModules | ForEach-Object {
             $Latest = [String](Find-Module -Name SnipeitPS | Sort-Object Version -Descending)[0].version;
             $Installed = [String](Get-Module -ListAvailable SnipeitPS | Select-Object -First 1).version;
             If ([System.Version]$Latest -gt [System.Version]$Installed) {
-                WriteLog -Log "[UPDATE] Updating $($Mdle)..." -Data $_;
-                Update-Module SnipeitPS -Force;
+                WriteLog -Log "[UPDATE] Updating $($Mdle)...";
+                Update-Module -Name $Mdle -Force;
             }
-            Try { Import-Module -Name $Mdle -Force; }
-            Catch {
-                WriteLog -Log "[ERROR] Unable to Import $($Mdle) Module." -Data $_;
-                EmailAlert -Subject "[ERROR] Importing Module" -Body $_;
-            }
+        }
+        Try { Import-Module -Name $Mdle -Force; }
+        Catch {
+            WriteLog -Log "[ERROR] Unable to Import $($Mdle) Module." -Data $_;
+            EmailAlert -Subject "[ERROR] Importing Module" -Body "$($_ | Out-String)";
         }
     } Catch { WriteLog -Log "[ERROR] $($_ | Out-String)"; }
 }
-WriteLog -Log "Requirements Installed and Loaded.";
+#WriteLog -Log "Requirements Installed and Loaded.";
 
-Connect-SnipeitPS -URL $Snipe.Url -apiKey $Snipe.Token;
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # General Device Information
-#####################################################################################################################################
-WriteLog -Log "Gathering Device Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Device Information...";
+Connect-SnipeitPS -URL $Snipe.Url -apiKey $Snipe.Token;
 $Location = "$(($DeviceName).Split("-")[0])-$(($DeviceName).Split("-")[1])";
-
 $DataHashTable.Add('Location', $Location);
 $DataHashTable.Add('DeviceName', $($DeviceName));
 $DataHashTable.Add('LastReported', (Get-Date));
 $DataHashTable.Add('LastReportedUnix', ([Math]::Round((Get-Date -UFormat %s),0)));
 $DataHashTable.Add('Model', $Win32_ComputerSystem.Model);
 $DataHashTable.Add('Manufacturer', "$($Win32_ComputerSystem.Manufacturer -replace " Inc.", '')");
-
 $DataHashTable.Add('Bios', $Win32_BIOS.SMBIOSBIOSVersion);
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Operating System Information
-#####################################################################################################################################
-WriteLog -Log "Gathering Operating System Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Operating System Information...";
 $Win32_OperatingSystem = Get-WmiObject -Class Win32_OperatingSystem;
 $DataHashTable.Add('OS', ($Win32_OperatingSystem.Name).Split("|")[0]);
 $DataHashTable.Add('Build', $Win32_OperatingSystem.Version);
 If ($DataHashTable['OS'] -Contains "Server") { $ModelCatID = $Snipe.ServerCatID; }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Bios Information
 #################################f###################################################################################################
-WriteLog -Log "Gathering Bios Information...";
-
-If (-NOT ($Win32_BIOS.SerialNumber)) { EmailAlert -Subject "No BIOS Serial Number" -Body ($Win32_BIOS | Out-String); }
+#WriteLog -Log "Gathering Bios Information...";
+If (-NOT ($SerialNumber)) { EmailAlert -Subject "No BIOS Serial Number" -Body ($Win32_BIOS | Out-String); }
 Try {
     If ($DataHashTable['Manufacturer'] -eq 'Dell' -AND (Get-Item -Path "DellSmbios:\" -ErrorAction SilentlyContinue)) {
+        $BiosChanged = @();
+        $Key = Get-Content $KeyFile;
+        $OldBiosPwd = Get-Content $OldPwdFile | ConvertTo-SecureString -Key $Key
+        $OldBiosPwd = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($OldBiosPwd);
+        $OldBiosPwd = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($OldBiosPwd);
+        $NewBiosPwd = Get-Content $NewPwdFile | ConvertTo-SecureString -Key $Key
+        $NewBiosPwd = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($NewBiosPwd);
+        $NewBiosPwd = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($NewBiosPwd);
+        If ((Get-Item -Path "DellSmbios:\Security\IsAdminPasswordSet").CurrentValue -eq "True") {
+            Try { Set-Item -Path DellSmbios:\Security\AdminPassword "$NewBiosPwd" -Password "$NewBiosPwd" -ErrorAction Stop; } 
+            Catch {
+                Try { Set-Item -Path DellSmbios:\Security\AdminPassword "$NewBiosPwd" -Password "$OldBiosPwd" -ErrorAction Stop; } 
+                Catch { EmailAlert -Subject "Bios Password Change Error" -Body "Unable to change the bios password:`n$($_)"; }
+            }
+        } Else { Set-Item -Path "DellSmbios:\Security\AdminPassword" "$NewBiosPwd"; }
         Function Set-DellBiosSetting {
             param( [Object[]] $Setting, [String] $Value )
             $CurrentValue = (Get-Item -Path "DellSmbios:\$($Setting.PSChildName)\$($Setting.Attribute)").CurrentValue;
+            #Write-Host $CurrentValue
             If ($CurrentValue -ne $Value) {
+                $BiosChanged += $Setting.Attribute;
                 Try { 
-                    Set-Item -Path "DellSmbios:\$($Setting.PSChildName)\$($Setting.Attribute)" -Value $Value;
+                    Set-Item -Path "DellSmbios:\$($Setting.PSChildName)\$($Setting.Attribute)" -Value $Value -Password $NewBiosPwd;
                     WriteLog -Log "Set Bios Setting: $($Setting.Attribute) to $($Value)."
                 } Catch {  WriteLog -Log "Failed to Set Bios Setting." -Data $_; }
             }    
         }
 
+        If ($BiosChanged.Count -gt 0) {
+            EmailAlert -Subject "Bios Configurations Changed" -Body "$($BiosChanged -join '`n')";
+        }
+
         ForEach ($Category in (Get-ChildItem -Path "DellSmbios:\").Category) {
-            $CategorySettings = Get-ChildItem -Path "DellSmbios:\$($Category)" -WarningAction SilentlyContinue | Select-Object Attribute,CurrentValue,PSChildName;
+            $CategorySettings = Get-ChildItem -Path "DellSmbios:\$($Category)" -WarningAction SilentlyContinue | 
+                                   Select-Object Attribute,CurrentValue,PSChildName;
             ForEach ($Setting in $CategorySettings) {
                 If ($DataHashTable['BootPathSecurity'] -eq 'UEFI') {
                     Switch ($Setting.Attribute) {
@@ -188,6 +246,7 @@ Try {
                         "SecureBoot" { $DataHashTable.Add('SecureBoot', (Get-Item -Path "DellSmbios:\$($Setting.PSChildName)\$($Setting.Attribute)").CurrentValue); }
                     }
                 }
+                #Write-Host "$($Setting.Attribute)  -  $($Setting.CurrentValue)";
                 Switch ($Setting.Attribute) {
                     "MemorySpeed" { $MemorySpeed = $Setting.CurrentValue; }
                     "MemoryTechnology" { $MemoryType = $Setting.CurrentValue; }
@@ -197,65 +256,84 @@ Try {
                     "SecureBoot" { $DataHashTable.Add('SecureBoot', (Get-Item -Path "DellSmbios:\$($Setting.PSChildName)\$($Setting.Attribute)").CurrentValue); }
                     "UefiBootPathSecurity" { $DataHashTable.Add('BootPathSecurity', (Get-Item -Path "DellSmbios:\$($Setting.PSChildName)\$($Setting.Attribute)").CurrentValue); }
                     "EmbNic1" { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; }
+                    "SfpNic" { Set-DellBiosSetting -Setting $Setting -Value "EnabledPXE"; }
                     "UefiNwStack" { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; }
                     "SmartErrors" { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; }
-                    "SfpNic" { Set-DellBiosSetting -Setting $Setting -Value "EnabledPXE"; }
                     "TpmSecurity " { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; }
                     "TpmActivation" { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; }
                     "AcPwrRcvry" { Set-DellBiosSetting -Setting $Setting -Value "Last"; }
                     "DeepSleepCtrl" { Set-DellBiosSetting -Setting $Setting -Value "Disabled"; }
-                    "WakeOnLan" { Set-DellBiosSetting -Setting $Setting -Value "Disabled"; }
+                    "WakeOnLan" { Set-DellBiosSetting -Setting $Setting -Value "LanWlan"; }
                     "BlockSleep" { Set-DellBiosSetting -Setting $Setting -Value "Disabled"; }
+                    "ChassisIntrusionStatus" { 
+                        If ($Setting.CurrentValue -ne "DoorClosed") {
+                            EmailAlert -Subject "Chassis Intrustion Detected" -Body "Chassis Status: $($Setting.CurrentValue)";
+                            Set-DellBiosSetting -Setting $Setting -Value "TripReset";
+                        }
+                    }
                     "WirelessLan" { If (-NOT (Get-WmiObject -Class win32_battery)) { Set-DellBiosSetting -Setting $Setting -Value "Disabled"; } }
                     "BluetoothDevice" { If (-NOT (Get-WmiObject -Class win32_battery)) { Set-DellBiosSetting -Setting $Setting -Value "Disabled"; } }
-                    "AutoOn" {
-                        If ($DailyPowerOnList -Contains $Location) { Set-DellBiosSetting -Setting $Setting -Value "EveryDay"; }
-                        Else { Set-DellBiosSetting -Setting $Setting -Value "SelectDays"; } Break;
-                    }
+                    "AutoOn" { Set-DellBiosSetting -Setting $Setting -Value "SelectDays"; Break; }
                     "AutoOnHr" { Set-DellBiosSetting -Setting $Setting -Value "7"; Break; }
                     "AutoOnMn" { Set-DellBiosSetting -Setting $Setting -Value "0"; Break; }
-                    "AutoOnTue" { If ($DailyPowerOnList -NotContains $Location) { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; Break; } }
+                    "AutoOnMon" { If ($DailyPowerOnList -Contains $Location) { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; } Break; }
+                    "AutoOnTue" { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; Break; }
+                    "AutoOnWed" { If ($DailyPowerOnList -Contains $Location) { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; } Break; }
+                    "AutoOnThur" { If ($DailyPowerOnList -Contains $Location) { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; } Break; }
+                    "AutoOnFri" { If ($DailyPowerOnList -Contains $Location) { Set-DellBiosSetting -Setting $Setting -Value "Enabled"; } Break; }
                 }
             }
         }
     }
 } Catch { 
-    WriteLog -Log "[ERROR] Issue Configuring Bios" -Data $_;
+    WriteLog -Log "[ERROR] Issue Configuring Bios"
     WriteLog -Log "$($_ | Out-String)"; 
+    EmailAlert -Subject "Error Configuring Bios" -Body "$($_ | Out-String)";
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Network Adapter Configurations
-#####################################################################################################################################
-WriteLog -Log "Gathering Network Adapter Information...";
-
-$Win32_NetworkAdapterConfiguration = Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter 'NOT Description LIKE "%Loopback%"' | Where-Object { $_.IPAddress };
-$DataHashTable.Add('IpAddress', "$($Win32_NetworkAdapterConfiguration.IPAddress | Where-Object { $_ -notlike "*:*"; })");
-$DataHashTable.Add('MacAddress', "$($Win32_NetworkAdapterConfiguration.MacAddress)");
-Switch ($Win32_NetworkAdapterConfiguration.DHCPEnabled) {
-    "True" { $DataHashTable.Add('DHCP', "Enabled"); }
-    "False" { $DataHashTable.Add('DHCP', "Disabled"); }
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Network Adapter Information...";
+$MacAddress = @();
+$IpAddress = @();
+$NetworkAdapters = @();
+Get-NetAdapter | Where-Object { $_.Name -NotLike "*bluetooth*" } | ForEach-Object {
+    $IfcDesc = $_.InterfaceDescription -replace "\([^\)]+\)",'' -replace '  ',' ';
+    $NetworkAdapters += "[$($_.ifIndex)] $($_.LinkSpeed) - $($IfcDesc)";
+    $MacAddress += "$($_.MacAddress -replace '-',':') [$($_.ifIndex)]";
+    If ($_.Status -eq 'Up') {
+        $InterfaceAlias = "$($_.Name)";
+        $IpAddress += "$((Get-NetIpAddress | Where-Object { $_.AddressFamily -Like "IPv4" -and $_.InterfaceAlias -eq $InterfaceAlias; }).IPAddress) [$($_.ifIndex)]";
+    }
+}
+$MacAddress = $MacAddress -join "`n";
+$IpAddress = $IpAddress -join "`n";
+$NetworkAdapters = $NetworkAdapters -join "`n";
+$DataHashTable.Add('IpAddress', $IpAddress);
+$DataHashTable.Add('MacAddress', $MacAddress);
+$DataHashTable.Add('NetworkAdapters', $NetworkAdapters);
+Switch ((Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Sort-Object -Property Index | Where-Object { $_.IPAddress } | Select-Object -First 1).DHCPEnabled) {
+    "True" { $DataHashTable.Add('DHCP', "Enabled"); Break; }
+    "False" { $DataHashTable.Add('DHCP', "Disabled"); Break; }
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Group Access
-#####################################################################################################################################
-WriteLog -Log "Gathering Local Group Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Local Group Information...";
 $LocalAdministrators = Get-LocalGroupMember -Group "Administrators";
 $DataHashTable.Add('LocalAdmins', ($LocalAdministrators).Name -join "`n");
-
 $RemoteDesktopUsers = Get-LocalGroupMember -Group "Remote Desktop Users";
 $DataHashTable.Add('RemoteUsers', ($RemoteDesktopUsers).Name -join "`n");
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Uptime
-#####################################################################################################################################
-WriteLog -Log "Calculating Uptime...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Calculating Uptime...";
 $Uptime = "";
 $UptimeVal = ((Get-Date)-($Win32_OperatingSystem).ConvertToDateTime($Win32_OperatingSystem.LastBootUpTime));
 Switch ($true) {
@@ -265,61 +343,98 @@ Switch ($true) {
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Software
-#####################################################################################################################################
-WriteLog -Log "Gathering Software Information...";
-
-$Software = (Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*).DisplayName
-$Software += (Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*).DisplayName
-$Software = $Software | Sort-Object | Select-Object -Unique;
-$DataHashTable.Add('Software', ($Software -join ';'));
-
-$SoftwareHash = $StringHasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($DataHashTable['Software']));
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Software Information...";
+$Apps = @();
+$32BitPath = "SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*";
+$64BitPath = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*";
+$Apps += Get-ItemProperty "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*";
+$Apps += Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*";
+$Apps += Get-ItemProperty "Registry::\HKEY_CURRENT_USER\$32BitPath";
+$Apps += Get-ItemProperty "Registry::\HKEY_CURRENT_USER\$64BitPath";
+$AllProfiles = Get-CimInstance Win32_UserProfile | Select-Object LocalPath, SID, Loaded, Special | Where-Object { $_.SID -Like "S-1-5-21-*" };
+$MountedProfiles = $AllProfiles | Where-Object { $_.Loaded -eq $true; }
+$UnmountedProfiles = $AllProfiles | Where-Object { $_.Loaded -eq $false; }
+$MountedProfiles | ForEach-Object {
+    $Apps += Get-ItemProperty -Path "Registry::\HKEY_USERS\$($_.SID)\$($32BitPath)";
+    $Apps += Get-ItemProperty -Path "Registry::\HKEY_USERS\$($_.SID)\$($64BitPath)";
+}
+$UnmountedProfiles | ForEach-Object {
+    $Hive = "$($_.LocalPath)\NTUSER.DAT";
+    If (Test-Path $Hive) {
+        REG LOAD HKU\temp $Hive | Out-Null;
+        $Apps += Get-ItemProperty -Path "Registry::\HKEY_USERS\temp\$($32BitPath)";
+        $Apps += Get-ItemProperty -Path "Registry::\HKEY_USERS\temp\$($64BitPath)";
+        [GC]::Collect();
+        [GC]::WaitForPendingFinalizers();
+        REG UNLOAD HKU\temp | Out-Null;
+    }
+}
+$VerProperty = @{ 
+    Name = 'WithVersions'; 
+    Expression = { 
+        If ($_.DisplayName -NotLike "*$(($_.DisplayVersion).SubString(0,($_.DisplayVersion).Length-2))*") {
+            "$($_.Displayname) - $($_.DisplayVersion)".Trim();
+        } Else { ($_.Displayname).Trim(); }
+    } 
+}
+$NoVerProperty = @{ 
+    Name = 'WithoutVersions'; 
+    Expression = {
+        $Version = $_.DisplayVersion;
+        If ($_.DisplayName -Like "*$Version*") {
+            "$($_.DisplayName -replace "$Version",'' -replace '\s+', ' ')".Trim();
+        } ElseIf ($_.DisplayName -Like "*$($Version.SubString(0,$Version.Length-2))") {
+            If ($_.DisplayName -Like "* - *") {
+                ("$($_.Displayname)".Split('-')[0].Trim()) -replace '\s+', ' ';
+            } Else {
+                "$(($_.DisplayName -replace "$($Version.SubString(0,$Version.Length-2))",'') -replace '\s+', ' ')".Trim();
+            }
+        } Else { ($_.Displayname).Trim(); }
+    }
+}
+$Software = $Apps | Where-Object { $_.DisplayName; } | Sort-Object DisplayName -Unique | Select-Object *,$VerProperty,$NoVerProperty;
+$DataHashTable.Add('Software', $Software.WithVersions -join ' ; ');
+$SoftwareHash = $StringHasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Software.WithoutVersions -join ' ; '));
 $DataHashTable.Add('SoftwareHash', ([System.BitConverter]::ToString($SoftwareHash)).Replace('-', ''));
-
 $LicensedSoftware = @();
 $SoftwareChecklist | ForEach-Object {
     $SW = $_;
-    $Installed = ($Software | Where-Object { $_ -like "$($SW)*" -AND $_ -notlike "background" });
+    $Installed = $Software.WithVersions | Where-Object { $_ -Like "$($SW)" -AND $_ -NotLike "*Geoprocessing*" -AND $_ -NotLike "*Update Helper*" -AND $_ -NotLike "*Reference Manager*" };
     If ($Installed.Count -gt 1) {
-        EmailAlert -Subject "Multiple Licensed Software Versions Installed" -Body "$($Installed)";
-    } ElseIf ($Installed) {  
-        $LicensedSoftware += $Installed;
-    }
+        EmailAlert -Subject "Uninstall Duplicate Licensed Software Versions" -Body "$($Installed)";
+    } ElseIf ($Installed) { $LicensedSoftware += $Installed; }
 }
 $DataHashTable.Add('LicensedSoftware', ($LicensedSoftware -join "`n"));
 
 
-
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Drive Configuration Collection 
-#####################################################################################################################################
-WriteLog -Log "Gathering Internal and External Drive Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Internal and External Drive Information...";
 Remove-Variable -Name InternalMedia -ErrorAction SilentlyContinue;
 Remove-Variable -Name RemovableMedia -ErrorAction SilentlyContinue;
-  
-$DiskDrives = Get-WmiObject Win32_DiskDrive -Property * | Sort-Object Size;
+$DiskDrives = Get-WmiObject Win32_DiskDrive -Property * | Sort-Object DeviceID;
 $DiskVolumes = Get-Volume | Sort-Object Index;
 $PhysicalDisks = Get-PhysicalDisk;
 $HighDriveUsage = $false;
 $InternalDisks = @();
 $InternalMedia = @();
 $RemovableMedia = @();
+$UnhealthyDisks = @();
 ForEach ($Disk in $DiskDrives) {
-    If ($Disk.HealthStatus -ne 'Healthy') {
-        ###############
-        ###############
-        ###############
-    }
     Remove-Variable -Name DiskInfo -ErrorAction SilentlyContinue;
     Remove-Variable -Name DriveType -ErrorAction SilentlyContinue;
     $PhysicalDisk = ($PhysicalDisks | Where-Object { $_.DeviceID -eq (($Disk.DeviceID).substring((($Disk.DeviceID).Length)-1)) });
-    If ($PhysicalDisk.MediaType -eq 'Unspecified') {
-        If ($PhysicalDisk.CannotPoolReason -eq 'Removable Media' -AND $PhysicalDisk.BusType -eq 'USB') { $Disk.MediaType = 'USB'; }
-    } Else { $Disk.MediaType = $PhysicalDisk.MediaType; }
-    If ($PhysicalDisk.BusType -eq $Disk.MediaType) { $DiskType = $PhysicalDisk.BusType; } 
+    Switch ($PhysicalDisk.MediaType) {
+        'Unspecified' { $Disk.MediaType = 'USB'; Break; }
+        'External hard disk media' { $Disk.MediaType = 'HDD'; Break; }
+        default { $Disk.MediaType = $PhysicalDisk.MediaType; }
+    }
+    If ($PhysicalDisk.BusType -eq $Disk.MediaType) { $DiskType = $PhysicalDisk.BusType; }
+    If ($PhysicalDisk.HealthStatus -ne 'Healthy') { $UnhealthyDisks += $PhysicalDisk; }
     Else { $DiskType = "$($Disk.MediaType)-$($PhysicalDisk.BusType)"; }
     $DiskInfo = "Disk$($Disk.Index): [$($DiskType)] $($Disk.Model) ($(GetHRSize $Disk.size))`n";
     $PartitionQuery = 'ASSOCIATORS OF {Win32_DiskDrive.DeviceID="'+$($Disk.DeviceID.replace('\','\\'))+'"} WHERE AssocClass=Win32_DiskDriveToDiskPartition';
@@ -335,31 +450,30 @@ ForEach ($Disk in $DiskDrives) {
                 $DataHashTable.Add('HasSSD', ('Yes','No')[($Disk.MediaType -ne 'SSD')]);
             }
             $DiskVolume = ($DiskVolumes | Where-Object { $_.Driveletter -eq ($Volume.DeviceID -replace ":",'') });
-            If ($PhysicalDisk.BusType -eq 'USB') { $DriveType = 'Removable'; } 
-            Else { $DriveType = $DiskVolume.DriveType; }
+            $DriveType = @($DiskVolume.DriveType,'Removable')[($PhysicalDisk.BusType -eq 'USB')]
             $DiskInfo += "--------- $VolumeData`n";
-            If (($DiskVolume.SizeRemaining / $DiskVolume.Size) -lt .1 -AND $DriveType -ne 'Removable') { $HighDriveUsage = $true; }
+            If ($DriveType -ne 'Removable' -AND (($DiskVolume.SizeRemaining / $DiskVolume.Size) -lt .1)) { $HighDriveUsage = $true; }
         }
     }
     Switch ($DriveType) {
-        "Fixed" { 
+        "Removable" { $RemovableMedia += $DiskInfo.Trim(); Break; }
+        default { 
             $InternalDisks += "[$($Disk.MediaType)] $($Disk.Model) ($(GetHRSize $Disk.size))";
             $InternalMedia += $DiskInfo.Trim(); Break; 
         }
-        "Removable" { $RemovableMedia += $DiskInfo.Trim(); Break; }
     }
 }
 $DataHashTable.Add('Drives', $InternalDisks -join "`n");
 $DataHashTable.Add('InternalMedia', $InternalMedia -join "`n");
 $DataHashTable.Add('RemovableMedia', $RemovableMedia -join "`n");
-If ($HighDriveUsage) { EmailAlert -Subject "Drive Usage Very High" -Body "$($InternalMedia)"; }
+If ($HighDriveUsage) { EmailAlert -Subject "Drive Usage Very High" -Body "$($InternalMedia)`n$RemovableMedia"; }
+If ($UnhealthyDisks.Count -gt 0) { EmailAlert -Subject "Unhealthy Drive(s) Detected" -Body "$($UnhealthyDisks | Format-List | Out-String)"; }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Logged In Users
-#####################################################################################################################################
-WriteLog -Log "Gathering Active User Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Active User Information...";
 Try {
     $ActiveUsers = @();
     $LoggedInUsers = quser | ForEach-Object -Process { $_ -replace '\s{2,}',','; };
@@ -375,43 +489,47 @@ Try {
     $DataHashTable.Add('ActiveUsers', ($ActiveUsers -join "`n"));
 } Catch {
    WriteLog -Log "[ERROR] Unable to Collect User Information." -Data $_;
-   EmailAlert -Subject "[ERROR] Unable to Collect User Information." -Body $_;
+   EmailAlert -Subject "[ERROR] Unable to Collect User Information." -Body "$($_ | Out-String)";
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Webcam IdentIfication
-#####################################################################################################################################
-WriteLog -Log "Gathering Webcam Information...";
-
-$Webcam = (Get-PnpDevice | Where-Object  { $_.Class -eq "Image" -AND $_.FriendlyName -like "*webcam*" } |
-            Get-PnpDeviceProperty | Where-Object { $_.KeyName -eq "DEVPKEY_Device_FriendlyName" }).Data -join "`n";
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Webcam Information...";
+$Webcam = Get-PnpDevice | Where-Object  { $_.Status -ne 'Unknown' -AND $_.Class -eq "Image" -AND $_.FriendlyName -Like "*webcam*" } | Get-PnpDeviceProperty;
+$WebcamGuid = ($Webcam | Where-Object { $_.KeyName -eq "DEVPKEY_Device_ContainerId" }).Data;
+$Webcam = ($Webcam | Where-Object { $_.KeyName -eq "DEVPKEY_Device_FriendlyName" }).Data;
+If ($Webcam.Count -gt 1) { 
+    EmailAlert -Subject "Multiple Webcams Assigned to Location" -Body "$($Webcam | Out-String)"; 
+}
 Switch ($true) {
     ($null -ne $Webcam) { $DataHashTable.Add('Webcam', "$($Webcam)"); Break; } 
     default { $DataHashTable.Add('Webcam', ''); }
 }
 
-#####################################################################################################################################
-# GPU IdentIfication
-#####################################################################################################################################
-WriteLog -Log "Gathering Graphics Information...";
 
+########################################################################################################################################################################################################
+# GPU IdentIfication
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Graphics Information...";
 $GraphicsCard = (Get-PnpDevice | Where-Object {$_.Class -eq "Display" -AND $_.Status -eq 'OK'} | 
-                Get-PnpDeviceProperty | Where-Object { $_.Keyname -eq "DEVPKEY_NAME" } | Sort-Object -Property Data).Data -join "`n";
+                    Get-PnpDeviceProperty | Where-Object { $_.Keyname -eq "DEVPKEY_NAME" } | 
+                    Where-Object { $_.Data -ne "Microsoft Remote Display Adapter" } | 
+                    Sort-Object -Property Data).Data -join "`n";
 Switch ($true) {
     ($null -ne $GraphicsCard) { $DataHashTable.Add('Graphics', "$($GraphicsCard)"); Break; } 
     default { $DataHashTable.Add('Graphics', ''); }
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # RAM/Memory
-#####################################################################################################################################
-WriteLog -Log "Gathering Memory Information...";
-
-$Memory = Get-WmiObject -Class Win32_PhysicalMemory;
-$MemoryVoltage = $Memory[0].ConfiguredVolage;
-If (-NOT ($MemorySpeed)) { $MemorySpeed = "$($Memory[0].Speed)MHz"; }
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Memory Information...";
+$Memory = Get-WmiObject -Class Win32_PhysicalMemory | Select-Object * -First 1;
+$MemoryVoltage = $Memory.ConfiguredVoltage;
+If (-NOT ($MemorySpeed)) { $MemorySpeed = "$($Memory.Speed)MHz"; }
 If (-NOT ($MemoryType)) { 
     Switch ($MemoryVoltage) { 
         '1200' { $MemoryType = "DDR4"; } 
@@ -419,7 +537,7 @@ If (-NOT ($MemoryType)) {
         default { $MemoryType = ''; } 
     }
 }
-$Memory = $Memory | Measure-Object -Property Capacity -Sum;
+$Memory = Get-WmiObject -Class Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum;
 
 $MemoryAvailable = [math]::Round(($Win32_OperatingSystem.FreePhysicalMemory / 1MB),1);
 $MemoryUsed = [math]::Round((($Memory.Sum / 1gb)-($Win32_OperatingSystem.FreePhysicalMemory / 1MB)),1);
@@ -433,11 +551,10 @@ If ([int]$MemoryAvailable -lt 1 -AND $DataHashTable['Model'] -ne "Virtual Machin
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # CPU/Processor
-#####################################################################################################################################
-WriteLog -Log "Gathering Processor Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Gathering Processor Information...";
 $Win32_Processor = (Get-WmiObject Win32_Processor | Select-Object *);
 If ($Win32_Processor.Count -gt 1) { 
     $Win32_Processor = $Win32_Processor[0]; 
@@ -449,21 +566,32 @@ $AssetProcessor = ($AssetProcessor -replace '  | 0 ',' ');
 $DataHashTable.Add('CPU', $AssetProcessor);
 
 
-#####################################################################################################################################
-# Load Record If Exists
-#####################################################################################################################################
-WriteLog -Log "Loading Existing Record...";
+########################################################################################################################################################################################################
+# Applied Updates
+########################################################################################################################################################################################################
+#WriteLog -Log "Fetching Applied Updates...";
+$AppliedUpdates = "";
+Get-WmiObject -Class Win32_QuickfixEngineering | Where-Object { $_.InstalledOn -ge ((Get-Date).AddMonths(-12)); } | Sort-Object InstalledOn -Descending -ErrorAction SilentlyContinue | ForEach-Object {
+    If ($AppliedUpdates.Length -gt 0) { $AppliedUpdates +="`n"; }
+    $AppliedUpdates += "$($_.HotFixID)   $(([string]($_.InstalledOn)).Split(' ')[0])";
+}
+$DataHashTable.Add('AppliedUpdates', $AppliedUpdates);
 
+
+########################################################################################################################################################################################################
+# Load Record If Exists
+########################################################################################################################################################################################################
+#WriteLog -Log "Loading Existing Record...";
 If (Test-Path -Path $CsvFile -PathType Leaf) {
     $Record = Import-Csv -Path $CsvFile;
 }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Fetch Dell Warranty Data
-#####################################################################################################################################
-WriteLog -Log "Checking Dell Warranty Information...";
-
+########################################################################################################################################################################################################
+#WriteLog -Log "Checking Dell Warranty Information...";
+$DellUri = "https://apigtwb2c.us.dell.com/PROD/sbil/eapi/v5/asset-entitlements";
 If ($DataHashTable['Model'] -ne "Virtual Machine") {
     If (!$Record -OR !$Record.Purchased -OR !$Record.WarrantyMonths) {
         WriteLog -Log "Updating Purchase and Warranty Dates..."
@@ -486,7 +614,7 @@ If ($DataHashTable['Model'] -ne "Virtual Machine") {
                 };
                 $DellApiParams = @{ };
                 $DellApiParams = @{servicetags = $DataHashTable['SerialNumber']; Method = "GET"};
-                $DellApiResponse = Invoke-RestMethod -Uri "https://apigtwb2c.us.dell.com/PROD/sbil/eapi/v5/asset-entitlements" -Headers $DellApiHeaders -Body $DellApiParams -Method Get -ContentType "application/json" -ea 0;
+                $DellApiResponse = Invoke-RestMethod -Uri $DellUri -Headers $DellApiHeaders -Body $DellApiParams -Method Get -ContentType "application/json" -ea 0;
                 $DellApiResponse = $DellApiResponse | ConvertTo-Json | ConvertFrom-Json;
                 If ($DellApiResponse) {
                     $DataHashTable.Add('WarrantyExpiration', (($DellApiResponse.entitlements | Select-Object -Last 1).endDate | Get-Date));
@@ -513,17 +641,25 @@ If ($DataHashTable['Model'] -ne "Virtual Machine") {
     $DataHashTable.Add('WarrantyMonths', [math]::Round(((New-TimeSpan -Start $DataHashTable['Purchased'] -End $DataHashTable['WarrantyExpiration']).Days) / 30.33));
 }
 
-#####################################################################################################################################
+
+########################################################################################################################################################################################################
 # Update SnipeIT 
-#####################################################################################################################################
-WriteLog -Log "Checking in to SnipeIT...";
+########################################################################################################################################################################################################
+#WriteLog -Log "Checking in to SnipeIT...";
 $SnipeAsset = Get-SnipeItAsset -asset_serial $DataHashTable['SerialNumber'];
+If ($SnipeAsset.StatusCode -eq 'InternalServerError') {
+    Start-Sleep -Seconds 120;
+    $SnipeAsset = Get-SnipeItAsset -asset_serial $DataHashTable['SerialNumber'];
+    If ($SnipeAsset.StatusCode -eq 'InternalServerError') {
+        EmailAlert -Subject "Error searching SnipeIT" -Body "(Duplicate Check)`n$($SnipeAsset | Format-List | Out-String)";
+        Exit 0;
+    }
+}
 $CustomValues.Add('purchase_date', $DataHashTable['Purchased']);
 $CustomValues.Add('warranty_months', $DataHashTable['WarrantyMonths']);
 $CustomValues.Add('_snipeit_mac_address_1', $DataHashTable['MacAddress']);
 $CustomValues.Add('_snipeit_cpu_2', $DataHashTable['CPU']);
 $CustomValues.Add('_snipeit_ram_3', $DataHashTable['RAM']);
-$CustomValues.Add('_snipeit_fqdn_4', [System.Net.Dns]::GetHostEntry($DataHashTable['IpAddress']).HostName);
 $CustomValues.Add('_snipeit_operating_system_5', $DataHashTable['OS']);
 $CustomValues.Add('_snipeit_ip_address_9', $DataHashTable['IpAddress']);
 $CustomValues.Add('_snipeit_bios_11', $DataHashTable['Bios']);
@@ -534,6 +670,15 @@ $CustomValues.Add('_snipeit_internal_media_16', $DataHashTable['InternalMedia'])
 $CustomValues.Add('_snipeit_external_media_17', $DataHashTable['RemovableMedia']);
 $CustomValues.Add('_snipeit_licensed_software_18', $DataHashTable['LicensedSoftware']);
 $CustomValues.Add('_snipeit_remote_desktop_users_19', $DataHashTable['RemoteUsers']);
+$CustomValues.Add('_snipeit_applied_updates_22', $DataHashTable['AppliedUpdates']);
+$CustomValues.Add('_snipeit_network_adapters_24', $DataHashTable['NetworkAdapters']);
+$NextAuditDate = Get-Date;
+If ($NextAuditDate.Month -ne 1) {
+    $NextAuditDate = New-Object DateTime(($NextAuditDate.Year+1), 1, [DateTime]::DaysInMonth($NextAuditDate.Year, $NextAuditDate.Month))
+    $Diff = ([int] [DayOfWeek]::Friday) - ([int]$lastDay.DayOfWeek);
+    $NextAuditDate = @((Get-Date -Date $NextAuditDate.AddDays($Diff)),(Get-Date -Date $NextAuditDate.AddDays(- (7-$Diff))))[($Diff -ge 0)];
+    $CustomValues.Add('next_audit_date', ($NextAuditDate | Get-Date -UFormat "%Y-%m-%d"));
+}
 If (!$SnipeAsset) {
     Try {
         Try {
@@ -553,13 +698,14 @@ If (!$SnipeAsset) {
                 $Model = New-SnipeItModel -name $DataHashTable['Model'] -manufacturer_id $ManufacturerID -fieldset_id $Snipe.FieldSetID -category_id $ModelCatID;
             }
         } Catch { WriteLog -Log "[SnipeIT] [ERROR] Unable to obtain Model ID." -Data $_; }
-        $SnipeAsset = New-SnipeItAsset -name $DataHashTable['DeviceName'] -status_id 8 -model_id $Model.id -serial $DataHashTable['SerialNumber'] -asset_tag $DataHashTable['SerialNumber'] -customfields $CustomValues;
+        $SnipeAsset = New-SnipeItAsset -name $DataHashTable['DeviceName'] -status_id 5 -model_id $Model.id -serial $DataHashTable['SerialNumber'] -asset_tag $DataHashTable['SerialNumber'] -customfields $CustomValues;
         WriteLog -Log "[SnipeIT] Created a new Asset in SnipeIT.";
     } Catch { WriteLog -Log "[SnipeIT] [ERROR] Unable to Create new Asset." -Data $_; }
 } ElseIf ($SnipeAsset.Count -gt 1) {
     WriteLog -Log "[ERROR] Multiple Assets with Identical Serial Numbers Found in SnipeIT.";
-    EmailAlert -Subject "Multiple Assets with Identical Serial Numbers Found." -Body "Asset Name: $($DeviceName)`n`n$($SnipeAsset | Format-List | Out-String)";
+    EmailAlert -Subject "[Inventory Discrepancy] Multiple Assets with Identical Serial Numbers Found" -Body "Asset Name: $($DeviceName)`n`n$($SnipeAsset | Format-List | Out-String)";
 } Else {
+    # Check Assigned User and Remote Users
     $UserAssigned = $SnipeAsset.assigned_to.username;
     $RemoteUsers = ($RemoteDesktopUsers | Where-Object { $_.ObjectClass -ne 'Group' } | Select-Object -Property @{ Name="Name"; Expression={ ($_.Name).Split("\")[1] } }).Name;
     If ($RemoteUsers -NotContains $UserAssigned) {
@@ -577,8 +723,9 @@ If (!$SnipeAsset) {
         }
         EmailAlert -Subject "Unauthorized Remote Users" -Body "The following accounts were removed from the local Remote Desktop Users group:`n$($UnauthorizedRemoteUsers)";
     }
+    # Check Asset Tag
     If ($SnipeAsset.asset_tag) { $DataHashTable.Add('AssetTag', $SnipeAsset.asset_tag); }
-    If ($DataHashTable['Location'] -notlike "CCCJ-*") {
+    # Check Location
         If ($SnipeAsset.location -AND $SnipeAsset.location.id) {
             $SnipeLocation = (Get-SnipeItLocation -id $SnipeAsset.location.id).name;
         } Else { $SnipeLocation = "UNASSIGNED"; }
@@ -590,115 +737,222 @@ If (!$SnipeAsset) {
             $Location = New-SnipeItLocation -name $DataHashTable['Location'];
         }
         If ((($SnipeLocation.Split('-') | Select-Object -First 2) -join '-') -ne $Location.name) {
-            EmailAlert -Subject "Asset Location in SnipeIT does not match naming convention." -Body "SnipeIT Location: $($SnipeLocation)`nAsset Name: $($DeviceName)`n$($SnipeAsset | Format-List | Out-String)";
+            EmailAlert -Subject "[Inventory Discrepancy] Update Asset Location in SnipeIT" -Body "SnipeIT Location: $($SnipeLocation)`nAsset Name: $($DeviceName)`n$($SnipeAsset | Format-List | Out-String)";
+        }
+    # Check Webcam
+    If ($Webcam -AND !($Webcam.Count -gt 1)) {
+        $SnipeWebcam = Get-SnipeItAsset -location_id $SnipeAsset.location.id | Where-Object { $Webcam -like $_.model.name };
+        If ($SnipeWebcam) { 
+            If (!$SnipeWebcam.custom_fields.GUID.value -OR $SnipeWebcam.custom_fields.GUID.value -eq '') {
+                Start-Sleep -Seconds $RandomNumber;
+                Set-SnipeitAsset -id $SnipeWebcam.id -customfields @{ _snipeit_guid_25=$WebcamGuid; }
+            } ElseIf ($SnipeWebcam.custom_fields.GUID.value -ne $WebcamGuid) {
+                WriteLog -Log "Webcam GUIDs Do not Match!";
+                EmailAlert -Subject "Webcam GUIDs Do Not Match!" -Body "Assigned Webcam GUID: $($SnipeWebcam.custom_fields.GUID.value)`nSeen Webcam GUID: $($WebcamGuid)"
+            }
+            If (!$SnipeWebcam.custom_fields.Host.value -OR $SnipeWebcam.custom_fields.Host.value -eq '') {
+                Start-Sleep -Seconds $RandomNumber;
+                Set-SnipeitAsset -id $SnipeWebcam.id -customfields @{ _snipeit_host_26=$DeviceName; }
+            } If ($SnipeWebcam.custom_fields.Host.value -ne $DeviceName) {
+                WriteLog -Log "Assigned Hosts for the Webcam do not Match!";
+                EmailAlert -Subject "Webcam Hosts Does Not Match!" -Body "Assigned Webcam Host: $($SnipeWebcam.custom_fields.Host.value)`nSeen Webcam Host: $($DeviceName)"
+            }
+        } Else {
+            $SnipeWebcam = Get-SnipeItAsset -Search $WebcamGuid;
+            If ($SnipeWebcam) { EmailAlert -Subject "Webcam not Assigned to Location" -Body "$($SnipeWebcam | Out-String)"; }
         }
     }
-    $LicensedSoftware | ForEach-Object {
-        $SW = $_;
-        Switch -Wildcard ($SW) {
-            'Stata*' {
-                If (Get-ChildItem -Path "C:\Program Files\$($SW -replace ' ','')\stata.lic" -ErrorAction SilentlyContinue) {
-                    $StataLicense = (Get-ChildItem -Path "C:\Program Files\$($SW -replace ' ','')\stata.lic" | Get-Content).Split('!');
-                } ElseIf (Get-ChildItem -Path "C:\Program Files (x86)\$($SW -replace ' ','')\STATA.LIC" -ErrorAction SilentlyContinue) {
-                    $StataLicense = (Get-ChildItem -Path "C:\Program Files (x86)\$($SW -replace ' ','')\STATA.LIC" | Get-Content).Split('!');
-                }
-                If (!$StataLicense) {
-                    EmailAlert -Subject "Unlicensed Stata Install" -Body "No Stata license is configured for install on this PC.";
-                } Else {
-                    $LocalStataSerial = $StataLicense[0];
-                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'Stata*' };
-                    If (!$AssignedLicense) {
-                        $SnipeItStataLicense = Get-SnipeItLicense | Where-Object { $_.name -like "Stata*" -AND ([BigInt]($_.product_key.Split("`n")[0]) -eq [BigInt]$LocalStataSerial) };
-                        If ($SnipeItStataLicense) {
-                            $OpenStataSeats = Get-SnipeItLicenseSeat -id $SnipeItStataLicense.id | 
-                                                    Where-Object { !$_.assigned_asset } | 
-                                                    Sort-Object -Property id;
-                            If (!$OpenStataSeats -OR $OpenStataSeats.Count -lt 1) {
-                                EmailAlert -Subject "Stata License Error" -Body "The Stata license assigned has no open seats.`n`nInstalled:`n$($StataLicense | Out-String)";
-                            } Else {
-                                Set-SnipeItLicenseSeat -id $SnipeItStataLicense.id -seat_id $OpenStataSeats[0].id -asset_id $SnipeAsset.id;
-                            }
-                        } Else {
-                            EmailAlert -Subject "Unknown Stata License" -Body "A Stata license was seen that does not match anything in the inventory.`n`nInstalled:`n$($StataLicense)";
-                        }
-                    } Else {
-                        $SnipeItStataSerial = $AssignedLicense.product_key.Split("`n")[0];
-                        If ([BigInt]$SnipeItStataSerial -ne [BigInt]$LocalStataSerial) {
-                            EmailAlert -Subject "Mismatched Stata License" -Body "A Stata license assigned is not the same license that is instaled.`n`nInstalled:`n$($StataLicense)`n`nAssigned:`n$($AssignedLicense | Out-String)";
-                        }
-                    }
-                }
-            }
-            'Stat/Transfer*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'Stat/Transfer*' };
-                If (!$AssignedLicense) {
-                    
-                }
-            }
-            'HLM*' {
-
-            }
-            'MPlus*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'MPlus*' };
-            }
-            'SAS*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'SAS*' };
-                If (!$AssignedLicense) {
-                    $SnipeItSasLicense = Get-SnipeItLicense | Where-Object { $_.name -like "SAS*" };
-                    If ($SnipeItSasLicense) {
-                        $OpenSasSeats = Get-SnipeItLicenseSeat -id $SnipeItSasLicense.id | Where-Object { !$_.assigned_asset } | Sort-Object -Property id;
-                        If (!$OpenSasSeats -OR $OpenSasSeats.Count -lt 1) {
-                            EmailAlert -Subject "SAS License Error" -Body "The SAS license assigned has no open seats.";
-                        } Else {
-                            $AssignLicense = Set-SnipeItLicenseSeat -id $SnipeItSasLicense.id -seat_id $OpenSasSeats[0].id -asset_id $SnipeAsset.id;
-                        }
-                    } Else {
-                        EmailAlert -Subject "Unknown SAS License" -Body "A SAS license cannot be found in the inventory.";
-                    }
-                }
-            }
-            'SPSS*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'SPSS*' };
-                If (!$AssignedLicense) {
-                    $SnipeItSpssLicense = Get-SnipeItLicense | Where-Object { $_.name -like "SPSS*" };
-                    If ($SnipeItSpssLicense) {
-                        $OpenSpssSeats = Get-SnipeItLicenseSeat -id $SnipeItSpssLicense.id | Where-Object { !$_.assigned_asset } | Sort-Object -Property id;
-                        If (!$OpenSpssSeats -OR $OpenSpssSeats.Count -lt 1) {
-                            EmailAlert -Subject "SPSS License Error" -Body "The SPSS license assigned has no open seats.";
-                        } Else { $AssignedLicense = Set-SnipeItLicenseSeat -id $SnipeItSpssLicense.id -seat_id $OpenSpssSeats[0].id -asset_id $SnipeAsset.id; }
-                    } Else { EmailAlert -Subject "Unknown SPSS License" -Body "An SPSS license cannot be found in the inventory."; }
-                }
-            }
-            'EndNote*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'EndNote*' };
-                If (!$AssignedLicense) {
-
-                }
-            }
-            'ArcGIS*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'ArcGIS*' };
-                If (!$AssignedLicense) {
-                    
-                }
-            }
-            'Papers*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'Papers*' };
-                If (!$AssignedLicense) {
-
-                }
-            }
-            'Nvivo*' {
-                $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -like 'Nvivo*' };
-                If (!$AssignedLicense) {
-
-                }
-            }
-        }
-    }
-
+    # Check License Software
     Try {
-        $Model = Get-SnipeItModel -search $DataHashTable['Model'];
-        $ManufacturerID = $SnipeAsset.manufacturer.id;
+        #WriteLog -Log "Checking Installed Software against Inventory...";
+        $AssetData = $($SnipeAsset | Select-Object @{N='Name';E={$_.name}},@{N='AssetTag';E={$_.asset_tag}},@{N='Serial';E={$_.serial}},@{N='AssignedTo'; E={$_.assigned_to.username}} | Format-List | Out-String);
+        $LicensedSoftware | ForEach-Object {
+            $SW = ($_).Split('-')[0].Trim();
+            Switch -Wildcard ($SW) {
+                'Stata*' {
+                    If (Get-ChildItem -Path "C:\Program Files\$($SW -replace ' ','')\STATA.LIC" -ErrorAction SilentlyContinue) {
+                        $StataLicense = (Get-ChildItem -Path "C:\Program Files\$($SW -replace ' ','')\STATA.LIC" | Get-Content).Split('!');
+                    } ElseIf (Get-ChildItem -Path "C:\Program Files (x86)\$($SW -replace ' ','')\STATA.LIC" -ErrorAction SilentlyContinue) {
+                        $StataLicense = (Get-ChildItem -Path "C:\Program Files (x86)\$($SW -replace ' ','')\STATA.LIC" | Get-Content).Split('!');
+                    }
+                    If (!$StataLicense) {
+                        EmailAlert -Subject "[Software Discrepancy] Unlicensed Stata Install" -Body "No Stata license is configured for install on this PC.";
+                    } Else {
+                        $LocalStataSerial = $StataLicense[0];
+                        $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like 'Stata*' } | Select-Object id,name,product_key;
+                        If (!$AssignedLicense) {
+                            $SnipeItStataLicense = Get-SnipeItLicense | Where-Object { $_.name -Like "Stata*" -AND ([BigInt]($_.product_key.Split("`n")[0]) -eq [BigInt]$LocalStataSerial) };
+                            If ($SnipeItStataLicense) {
+                                $OpenStataSeats = Get-SnipeItLicenseSeat -id $SnipeItStataLicense.id | Where-Object { !$_.assigned_asset } | Sort-Object -Property name;
+                                If (!$OpenStataSeats) { EmailAlert -Subject "Stata License Error" -Body "The Stata license assigned has no open seats.`n`nInstalled:`n$($StataLicense | Out-String)"; }
+                                Else { Set-SnipeItLicenseSeat -id $SnipeItStataLicense.id -seat_id $OpenStataSeats[0].id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id; }
+                            } Else { EmailAlert -Subject "Unknown Stata License" -Body "A Stata license was seen that does not match anything in the inventory.`n`nInstalled:`n$($StataLicense)"; }
+                        } Else {
+                            $SnipeItStataSerial = $AssignedLicense.product_key.Split("`n")[0];
+                            If ($AssignedLicense.Count -gt 1) {
+                                EmailAlert -Subject "[Inventory Discrepancy] Multiple Stata Licenses Assigned" -Body "This asset is using multiple license seats.`n`nInstalled:`n$($StataLicense)`n`nAssigned:`n$($AssignedLicense | Out-String)";
+                            } ElseIf ([BigInt]$SnipeItStataSerial -ne [BigInt]$LocalStataSerial) {
+                                EmailAlert -Subject "[Inventory Discrepancy] Mismatched Stata License" -Body "A Stata license assigned is not the same license that is instaled.`n`nInstalled:`n$($StataLicense)`n`nAssigned:`n$($AssignedLicense | Out-String)";
+                            } Else {
+                                $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id };
+                                If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                                    Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                                } ElseIf ($SnipeAsset.assigned_to.username -AND ($LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id)) {
+                                    EmailAlert -Subject "Stata License Error" -Body "The Stata license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                                }
+                            }
+                        }
+                    }
+                }
+                'Stat/Transfer*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like 'Stat/Transfer*' } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+                        $StatTransferLicense = Get-SnipeItLicense | Where-Object { $_.name -Like "Stat/Transfer*" };
+                        If ($StatTransferLicense) {
+                            $OpenStatTransferSeats = Get-SnipeItLicenseSeat -id $StatTransferLicense.id | Where-Object { !$_.assigned_asset } | Sort-Object -Property name;
+                            If (!$OpenStatTransferSeats) { EmailAlert -Subject "[Inventory Discrepancy] Stat/Transfer License Error" -Body "The Stat/Transfer license assigned has no open seats."; }
+                            Else { Set-SnipeItLicenseSeat -id $StatTransferLicense.id -seat_id $OpenStatTransferSeats[0].id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id; }
+                        } Else { EmailAlert -Subject "[Inventory Discrepancy] Unknown Stat/Transfer License" -Body "Cannot find a Stat/Transfer license in Snipe IT."; }
+                    } Else {
+                        If ($AssignedLicense.Count -gt 1) {
+                            $EmailSubject = "[Inventory Discrepancy] Multiple Stat/Transfer Licenses Assigned";
+                            $EmailBody = "This asset is using multiple license seats.`n`nInstalled:`n$($StatTransferLicense)`n`nAssigned:`n$($AssignedLicense | Out-String)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        } Else {
+                            $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id; };
+                            If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                                Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                            } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                                $EmailSubject = "Stat/Transfer License Error";;
+                                $EmailBody = "The Stat/Transfer license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                                EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                            }
+                        }
+                    }
+                }
+                'HLM*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like "HLM*"; } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+
+                    } Else {
+                        $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id };
+                        If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                            Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                        } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                            $EmailSubject = "HLM License Error";
+                            $EmailBody = "The HLM license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        }
+                    }
+                }
+                'MPlus*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like "MPlus*"; };
+                    If (!$AssignedLicense) {
+                        EmailAlert -Subject "[Inventory Discrepancy] Unassigned Mplus License" -Body "Mplus is installed, but a license is not assigned in the inventory system.$($AssetData)";
+                    }
+                }
+                'SAS*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like "SAS*"; } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+                        $SnipeItSasLicense = Get-SnipeItLicense | Where-Object { $_.name -Like "SAS*"; };
+                        If ($SnipeItSasLicense) {
+                            $OpenSasSeats = Get-SnipeItLicenseSeat -id $SnipeItSasLicense.id | Where-Object { !$_.assigned_asset } | Sort-Object -Property name;
+                            If (!$OpenSasSeats) { EmailAlert -Subject "[Inventory Discrepancy] SAS License Error" -Body "The SAS license assigned has no open seats."; } 
+                            Else { Set-SnipeItLicenseSeat -id $SnipeItSasLicense.id -seat_id $OpenSasSeats[0].id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id; }
+                        } Else { EmailAlert -Subject "[Inventory Discrepancy] Unknown SAS License" -Body "A SAS license cannot be found in the inventory."; }
+                    } Else {
+                        If ($AssignedLicense.Count -gt 1) {
+                            $EmailSubject = "[Inventory Discrepancy] Multiple SAS Licenses Assigned";
+                            $EmailBody = "This asset is using multiple license seats.`n`nInstalled:`n$($StatTransferLicense)`n`nAssigned:`n$($AssignedLicense| Out-String)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        } Else {
+                            $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id; };
+                            If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                                Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                            } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                                $EmailSubject = "SAS License Error";
+                                $EmailBody = "The SAS license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                                EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                            }
+                        }
+                    }
+                }
+                'IBM SPSS*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like "IBM SPSS*"; } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+                        $SnipeItSpssLicense = Get-SnipeItLicense | Where-Object { $_.name -Like "IBM SPSS*"; };
+                        If ($SnipeItSpssLicense) {
+                            $OpenSpssSeats = Get-SnipeItLicenseSeat -id $SnipeItSpssLicense.id | Where-Object { !$_.assigned_asset } | Sort-Object -Property name;
+                            If (!$OpenSpssSeats) { EmailAlert -Subject "[Inventory Discrepancy] SPSS License Error" -Body "The SPSS license assigned has no open seats."; } 
+                            Else { $AssignedLicense = Set-SnipeItLicenseSeat -id $SnipeItSpssLicense.id -seat_id $OpenSpssSeats[0].id -asset_id $SnipeAsset.id; }
+                        } Else { EmailAlert -Subject "[Inventory Discrepancy] Unknown SPSS License" -Body "An SPSS license cannot be found in the inventory."; }
+                    } Else {
+                        $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id };
+                        If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                            Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                        } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                            $EmailSubject = "SPSS License Error";
+                            $EmailBody = "The SPSS license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        }
+                    }
+                }
+                'EndNote*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like 'EndNote*' } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+
+                    } Else {
+                        $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id };
+                        If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                            Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                        } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                            $EmailSubject = "SPSS License Error";
+                            $EmailBody = "The SPSS license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        }
+                    }
+                }
+                'ArcGIS*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like 'ArcGIS*' } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+                        
+                    } Else {
+                        $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id };
+                        If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                            Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                        } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                            $EmailSubject = "ArcGIS License Error";
+                            $EmailBody = "The ArcGIS license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        }
+                    }
+                }
+                'Papers*' {
+                    $AssignedLicense = Get-SnipeItLicense -asset_id $SnipeAsset.id | Where-Object { $_.name -Like 'Papers*' } | Select-Object id,name,product_key;
+                    If (!$AssignedLicense) {
+
+                    } Else {
+                        $LicenseSeat = Get-SnipeItLicenseSeat -id $AssignedLicense.id | Where-Object { $_.assigned_asset.id -eq $SnipeAsset.id };
+                        If ($SnipeAsset.assigned_to.username -AND !$LicenseSeat.assigned_user) {
+                            Set-SnipeItLicenseSeat -id $AssignedLicense.id -seat_id $LicenseSeat.id -assigned_to $SnipeAsset.assigned_to.id -asset_id $SnipeAsset.id;
+                        } ElseIf ($SnipeAsset.assigned_to.username -AND  $LicenseSeat.assigned_user.id -ne $SnipeAsset.assigned_to.id) {
+                            $EmailSubject = "Papers License Error";
+                            $EmailBody = "The Papers license assigned user does not match the Asset's assigned user.`nLicense: $($LicenseSeat.assigned_user)`nAsset: $($SnipeAsset.assigned_to) $($AssetData)";
+                            EmailAlert -Subject $EmailSubject -Body $EmailBody;
+                        }
+                    }
+                }
+            }
+        }
+    } Catch { EmailAlert -Subject "Software License Inventory Check Error" -Body "$($_ | Out-String)"; }
+    # Audit Assigned Licenses
+    $AssignedLicenses = Get-SnipeItLicense -asset_id $SnipeAsset.id;
+    If ($AssignedLicenses) {
+        
+    }
+    # Update Asset
+    Try {
+        Start-Sleep -Seconds $RandomNumber;
         $UpdatedAsset = Set-SnipeItAsset -name $DataHashTable['DeviceName'] -id $SnipeAsset.id -status_id $Snipe.DefStatusID -customfields $CustomValues;
         WriteLog -Log "[SnipeIT] Updated an Asset in SnipeIT." -Data $UpdatedAsset;
         $SnipeAsset = $UpdatedAsset;
@@ -706,25 +960,23 @@ If (!$SnipeAsset) {
 }
 
 # Check for Duplicate objects in SnipeIT
-$DuplicateNames = Get-SnipeItAsset -Search $DataHashTable['DeviceName'] | Where-Object { $_.serial -ne $DataHashTable['SerialNumber'] -AND $_.assigned_to.name -notlike "$($DeviceName)*" };
-If ($DuplicateNames.Count -gt 0) {
-    $RemoveValues = {
-        _snipeit_fqdn_4 = '';
-        _snipeit_ip_address_9 = '';
-    }
+$DuplicateNames = Get-SnipeItAsset -Search $DataHashTable['DeviceName'] | Where-Object { $_.serial -ne $DataHashTable['SerialNumber'] -AND $_.assigned_to.name -NotLike "$($DeviceName)*" };
+If ($DuplicateNames.StatusCode -eq 'InternalServerError') {
+    EmailAlert -Subject "Error searching SnipeIT" -Body "(Duplicate Check)`n$($DuplicateNames | Format-List | Out-String)";
+} ElseIf ($DuplicateNames.Count -gt 0) {
     ForEach ($Duplicate in $DuplicateNames) {
-        #$UpdatedAsset = Set-SnipeItAsset -name '' -id $Duplicate.id -status_id 5 -customfields $RemoveValues;
+        $UpdatedAsset = Set-SnipeItAsset -name '' -id $Duplicate.id -customfields { _snipeit_ip_address_9 = ''; };
     }
     WriteLog -Log "[ERROR] Duplicate Information Found in SnipeIT.";
     EmailAlert -Subject "Multiple Assets with Identical Data Found. Removed data from inventory object." -Body "Asset Name: $($DeviceName)`n`n$($DuplicateNames | Format-List | Out-String)";
 }
 
-#####################################################################################################################################
+
+########################################################################################################################################################################################################
 # Save New Record If Not Exists
 ##########################################################################
 $DataObject = [PSCustomObject]$DataHashTable;
-$DataObject = $DataObject | Select-Object -Property AssetTag,SerialNumber,DeviceName,Model,Age,LastReported,MacAddress,IpAddress,HasSSD,LocalAdmins,RemoteUsers,ActiveUsers,Webcam,Graphics,SecureBoot,BootDrive,InternalMedia,RemovableMedia,CPU,RAM,SoftwareHash,Software,Location,WarrantyMonths,Purchased,DHCP,OS,BootPathSecurity,LegacyBoot,LegacyRoms,Uptime,LastReportedUnix,Build,Drives,WarrantyExpiration,Bios,Manufacturer,LicensedSoftware,RAM_Installed,BootMode;
-
+#$DataObject = $DataObject | Select-Object -Property AssetTag,SerialNumber,DeviceName,Model,Age,LastReported,MacAddress,IpAddress,HasSSD,LocalAdmins,RemoteUsers,ActiveUsers,Webcam,Graphics,SecureBoot,BootDrive,InternalMedia,RemovableMedia,CPU,RAM,SoftwareHash,Software,Location,WarrantyMonths,Purchased,DHCP,OS,BootPathSecurity,LegacyBoot,LegacyRoms,Uptime,LastReportedUnix,Build,Drives,WarrantyExpiration,Bios,Manufacturer,LicensedSoftware,RAM_Installed,BootMode;
 If (!$Record) {
     Try {
         $DataObject | Export-Csv -Path $CsvFile;
@@ -733,34 +985,39 @@ If (!$Record) {
     } Catch { WriteLog -Log "[ERROR] Error Saving Excel File.";  WriteLog -Log "[ERROR] $($_ | Out-String)"; }
 } Else {
 
-#####################################################################################################################################
-# Check for Added/Removed Software 
-#####################################################################################################################################
-    WriteLog -Log "Checking Software...";
 
+########################################################################################################################################################################################################
+# Check for Added/Removed Software 
+########################################################################################################################################################################################################
+    #WriteLog -Log "Checking Software...";
     If ($Record.SoftwareHash -ne $DataObject.SoftwareHash) {
-        $OldSoftware = ($Record.Software).Split(";");
-        $NewSoftware = ($DataObject.Software).Split(";");
+        WriteLog -Log "[SOFTWARE] Software Change found.";
+        $EmailText = "";
         $SoftwareChange = 0;
         $SoftwareChanges = @();
-        $EmailText = "";
-        ForEach ($NSW in $NewSoftware) {
-            If (($NSW -ne '') -AND ($OldSoftware -NotContains $NSW)) {
-                $SoftwareChanges += New-Object -TypeName PSObject -Property @{ Added=$NSW; };
+        $OldSoftwareList = @();
+        $NewSoftwareList = @();
+        $OldSoftware = ($Record.Software).Split(";").Trim();
+        $NewSoftware = ($DataObject.Software).Split(";").Trim();    
+        $OldSoftware | ForEach-Object { $OldSoftwareList += (($_).Split('-')[0]).Trim(); }
+        $NewSoftware | ForEach-Object { $NewSoftwareList += (($_).Split('-')[0]).Trim(); }
+        ForEach ($NSW in $NewSoftwareList) {
+            If (($NSW -ne '') -AND ($OldSoftwareList -NotContains $NSW)) {
+                $SoftwareChanges += New-Object -TypeName PSObject -Property @{ Added="$($NewSoftware[([array]::indexof($NewSoftwareList,$NSW))])"; }; 
             }
         }
-        ForEach ($OSW in $OldSoftware) {
-            If (($OSW -ne '') -AND ($NewSoftware -NotContains $OSW)) {
-                $SoftwareChanges += New-Object -TypeName PSObject -Property @{ Removed=$OSW; };
+        ForEach ($OSW in $OldSoftwareList) {
+            If (($OSW -ne '') -AND ($NewSoftwareList -NotContains $OSW)) { 
+                $SoftwareChanges += New-Object -TypeName PSObject -Property @{ Removed="$($OldSoftware[([array]::indexof($OldSoftwareList,$OSW))])"; }; 
             }
         }
         If ($SoftwareChanges.Added.Length -gt 0) {
             $SoftwareChange = $SoftwareChange + 1;
-            $EmailText += "$($SoftwareChanges | Where-Object  { $_.Added -ne $null; } | Select-Object Added | Format-Table -AutoSize | Out-String)";
+            $EmailText += "$($SoftwareChanges | Where-Object  { $_.Added -ne $null; } | Select-Object Added | Out-String)";
         }
         If ($SoftwareChanges.Removed.Length -gt 0) {
             $SoftwareChange = $SoftwareChange + 2;
-            $EmailText += "$($SoftwareChanges | Where-Object  { $_.Removed -ne $null; } | Select-Object Removed | Format-Table -AutoSize | Out-String)";
+            $EmailText += "$($SoftwareChanges | Where-Object  { $_.Removed -ne $null; } | Select-Object Removed | Out-String)";
         }
         Switch ($SoftwareChange) {
             1 { $SoftwareChange = "Added"; }
@@ -768,24 +1025,30 @@ If (!$Record) {
             3 { $SoftwareChange = "Added & Removed"; }
         }
         If ($SoftwareChange -gt 0) {
-            WriteLog -Log "[SOFTWARE] Software Change Found!";
+            WriteLog -Log "[SOFTWARE] Software Change Found!" -Data $SoftwareChanges;
             EmailAlert -Subject "Software $($SoftwareChange)" -Body $EmailText;
         }
     } Else { WriteLog -Log "[SOFTWARE] No Change in Software Found."; }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Check for Major Changes Since Last Report 
-#####################################################################################################################################
-
+########################################################################################################################################################################################################
     Try {
-        $DataComparison = Compare-Object -ReferenceObject $Record -DifferenceObject $DataObject -Property IpAddress,MacAddress,DeviceName,CPU,RAM_Installed,Drives,DHCP,OS,Bios,LocalAdmins,RemoteUsers,Graphics,Webcam -IncludeEqual
+        $ToCompare = 'DeviceName','IpAddress','MacAddress','NetworkAdapters','CPU','RAM_Installed','Drives','DHCP','OS','Bios','LocalAdmins','RemoteUsers','Graphics','Webcam';
+        $IpProp = @{ Name='IpAddress';  Expression={ ($_.IpAddress -replace '\[.*\]', '').Trim() } };
+        $MacProp = @{ Name='MacAddress'; Expression={ ($_.MacAddress -replace '\[.*\]', '').Trim() } };
+        $NetProp = @{ Name='NetworkAdapters'; Expression={ ($_.NetworkAdapters -replace '\[.*\]', '').Trim(); } };
+        $ReferenceObject = $Record | Select-Object DeviceName,$IpProp,$MacProp,$NetProp,CPU,RAM_Installed,Drives,DHCP,OS,Bios,LocalAdmins,RemoteUsers,Graphics,Webcam;
+        $DifferentObject = $DataObject | Select-Object DeviceName,$IpProp,$MacProp,$NetProp,CPU,RAM_Installed,Drives,DHCP,OS,Bios,LocalAdmins,RemoteUsers,Graphics,Webcam;
+        $DataComparison = Compare-Object -ReferenceObject $ReferenceObject -DifferenceObject $DifferentObject -Property $ToCompare -IncludeEqual;
         $MajorChange = $DataComparison.SideIndicator;
         If ($MajorChange -ne "==") {
             $MajorChanges = "";
             Switch ($true) {
                 ($Record.IpAddress -ne $DataObject.IpAddress) { $MajorChanges += "IP Address, "; }
-                ($Record.MacAddress -ne $DataObject.MacAddress) { $MajorChanges += "MAC Address, "; }
+                ($Record.MacAddress -ne $DataObject.MacAddress) { $MajorChanges += "MAC Address, ";}
+                ($Record.NetworkAdapters -ne $DataObject.NetworkAdapters) { $MajorChanges += "Network Adapters, "; }
                 ($Record.DeviceName -ne $DataObject.DeviceName) { $MajorChanges += "Device Name, "; }
                 ($Record.CPU -ne $DataObject.CPU) { $MajorChanges += "CPU, "; }
                 ($Record.RAM_Installed -ne $DataObject.RAM_Installed) { $MajorChanges += "RAM, "; }
@@ -800,17 +1063,17 @@ If (!$Record) {
             }
             $MajorChanges = $MajorChanges.Substring(0, ($MajorChanges.Length - 2));
             If ($MajorChanges -ne "RAM" -AND $DataObject.Model -ne "Virtual Machine") {
-                WriteLog -Log "[CONFIGURATION] Major Configuration Change Found!" -Data $($DataComparison | Format-List | Out-String);
+                WriteLog -Log "[CONFIGURATION] Major Configuration Change Found!";
+                WriteLog -Log "[CONFIGURATION] Changes: $MajorChanges" -Data $($DataComparison | Format-List | Out-String);
                 EmailAlert -Subject "$($MajorChanges) Changed" -Body "Change:  $MajorChanges`n$($DataComparison | Format-List | Out-String)";
             }
         } Else { WriteLog -Log "[CONFIGURATION] No Major Change in Device Configuration Found.";}
     } Catch { WriteLog -Log "[ERROR] Error Comparing Configurations." -Data $_; WriteLog -Data $DataComparison; }
 
 
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # Save New Data to the Excel File
-#####################################################################################################################################
-
+########################################################################################################################################################################################################
     $Record = $DataObject;
     Try {
         $Record | Export-Csv -Path $CsvFile;
@@ -819,28 +1082,11 @@ If (!$Record) {
 }
 
 
-#####################################################################################################################################
-# WSUS Check-In
-#####################################################################################################################################
-
-Try {
-    Start-Service wuauserv;
-    #$UpdateSession = new-object -com "Microsoft.Update.Session";
-    #$UpdateSession.CreateupdateSearcher().Search($criteria).Updates;
-    Start-sleep -seconds 10;
-    wuauclt /detectnow;
-    (New-Object -ComObject Microsoft.Update.AutoUpdate).DetectNow();
-    wuauclt /reportnow;
-    c:\windows\system32\UsoClient.exe startscan;
-    WriteLog -Log "[SUCCESS] WSUS Check-In was Successful.";
-} Catch {  WriteLog -Log "[ERROR] WSUS Check-In was Unsuccessful." -Data $_; }
-
-
-#####################################################################################################################################
+########################################################################################################################################################################################################
 # SCCM Check-In
-#####################################################################################################################################
-
-If ($DataObject.OS -notlike "*Server*") {
+########################################################################################################################################################################################################
+<#WriteLog -Log "Checking in to SCCM...";
+If ($DataObject.OS -NotLike "*Server*") {
     Try {
         $SMSCli = [wmiclass] "root\ccm:sms_client";
         If (-NOT (Get-WmiObject -Namespace root\ccm -Class SMS_Client)) {
@@ -885,9 +1131,21 @@ If ($DataObject.OS -notlike "*Server*") {
 	        }
         } Else { WriteLog -Log "[ERROR] SCCM Does Not Appear to be Installed."; }
     } Catch { WriteLog -Log "[ERROR] Error Checking In with SCCM." -Data $_; }
-}
+}#>
+
+
+########################################################################################################################################################################################################
+# Remove all Local Group Policy and Refresh Domain Policy
+########################################################################################################################################################################################################
+#WriteLog -Log "Removing Local Group Policy...";
+#If (Test-Path -Path "$env:windir\system32\GroupPolicyUsers") { Remove-Item "$env:windir\system32\GroupPolicyUsers" -Force -Recurse -ErrorAction SilentlyContinue; }
+#If (Test-Path -Path "$env:windir\system32\GroupPolicy") { Remove-Item "$env:windir\system32\GroupPolicy" -Force -Recurse -ErrorAction SilentlyContinue; }
+#gpupdate /force;
+
 
 #########################################
 # Th-th-th-th-that's all folks! 
 #########################################
+Write-Host "Script Completed in $([math]::Round((New-TimeSpan -Start $StartTime -End (Get-Date)).TotalSeconds, 1)) Seconds";
+#exit 0;
 #[Environment]::Exit(0);
