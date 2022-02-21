@@ -1,0 +1,76 @@
+//You must remove ALL comments from this JSON or it WILL fail. You can verify the JSON with https://jsonlint.com/
+{
+	"LogFileDir": "\\\\path\\to\\logFileDirectory",
+	"RecordFileDir": "\\\\path\\to\\recordFileDirectory",
+
+	"EmailParams": {
+		"From": "DisplayName <email@domain.com>",
+		"To": "",
+		"SMTPServer": "",
+		"Port": ""
+	},
+  
+	"DellApi": {
+		"Key": "",
+		"Secret": ""
+	},
+
+    "DellBios": {
+        // Keyfile is required to encrypt the passwords used below. This script will break if they are not encrypted.
+        // If you do not know how to do this part, you should not be configuring the Bios in this script
+        "KeyFile": "\\\\fs01.criminology.fsu.edu\\it\\scripts\\assetselfreporting\\AES.key",
+        //Old Pwd File allows you to change Bios passwords using this script or if you want to migrate any machines using an old password to a new one.
+        "OldPwdFile": "\\\\path\\to\\OldBiosPwd.txt",
+        "NewPwdFile": "\\\\path\\to\\NewBiosPwd.txt"
+    },
+
+	"Snipe": {
+		"Url": "https://yoursnipeit.com",
+		"Token": "",
+		"DefStatusID": 8,
+		"WorkstationCatID": 12,
+		"ServerCatID": 8,
+		"FieldSetID": 3,
+    // The fields below are examples from my environment. Yours WILL be different.
+		"field_MacAddress": "_snipeit_mac_address_1",
+		"field_Cpu": "_snipeit_cpu_2",
+		"field_Ram": "_snipeit_ram_3",
+		"field_OperatingSystem": "_snipeit_operating_system_5",
+		"field_IpAddress": "_snipeit_ip_address_9",
+		"field_Bios": "_snipeit_bios_11",
+		"field_LastReported": "_snipeit_last_reported_12",
+		"field_Graphics": "_snipeit_graphics_13",
+		"field_BootDrive": "_snipeit_boot_drive_15",
+		"field_InternalMedia": "_snipeit_internal_media_16",
+		"field_ExternalMedia": "_snipeit_external_media_17",
+		"field_LicensedSoftware": "_snipeit_licensed_software_18",
+		"field_RemoteDesktopUsers": "_snipeit_remote_desktop_users_19",
+		"field_AppliedUpdates": "_snipeit_applied_updates_22",
+		"field_NetworkAdapters": "_snipeit_network_adapters_24"
+	},
+  // This is a list of software you want the script to check for and show as installed in SnipeIT. I use it to monitor licensed software or software that shouldnt be installed.
+	// You can use wildcard * anywhere in the names that powershell allows.
+  "SoftwareChecklist": [
+		"Stata*",
+		"SAS 9*",
+		"IBM SPSS Statistics*",
+		"HLM*",
+		"EndNote*",
+		"ArcGIS*",
+		"Stat/Transfer*",
+		"Nvivo*",
+		"MPlus*",
+		"Dropbox*",
+		"Box*",
+		"Mendeley*",
+		"Zotero*"
+	],
+
+  // I use this to configure assets with this location in their names to power on every weekday instead of once per week
+	"DailyPowerOnList": [
+		"KGB-107A",
+		"KGB-112",
+		"KGB-415",
+		"KGB-409"
+	]
+}
