@@ -6,7 +6,10 @@ A script to compile an assets information and update SnipeIT inventory system.
 - Added/Removed Software Alerting. Checks all software, even user profile installed software.
 - Significant Configuration Change Alerting. A "significant change" is configured as a change in:
     - DeviceName, IpAddress, MacAddress, NetworkAdapters, CPU, RAM_Installed, Drives, DHCP, OS, Bios, LocalAdmins, RemoteUsers, Graphics, Webcam
-- Reports all data
+- Reports a lot of data that would normally need to be manually entered into SnipeIT.
+- Pulls warranty information from Dell API (Dell API Key required)
+- Uses device Serial Number to pull existing SnipeIT Asset or create a new one if it does not exist.
+- Wrote to work with Dell devices, but it will work with other windows machines as well. Automated warranty information feature will not work with anything other than Dell.
 
 ## Requirements:
 - SnipeIT Inventory System
