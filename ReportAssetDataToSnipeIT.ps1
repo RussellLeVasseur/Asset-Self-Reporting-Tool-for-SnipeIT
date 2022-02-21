@@ -1,52 +1,6 @@
-#####################################################################################################################################
-# Configs
-#####################################################################################################################################
-
-# This script creates directories a Directory Structure for Year and Month.
-$LogFileDirectory = "";
-
-# Creates and Stores Data in an Excel CSV
-$CsvFilePath = "";
-
-# Send Emails when Critical Data has seen an Update or when new Assets report
-$EmailParams = @{
-    From = "";
-    To = "";
-    SMTPServer = "";
-    port = "25";
-}
-
-# Dell Warranty API Fetch
-$DellApi =@{
-    Key = "";
-    Secret = "";
-}
-
-# If you want to use this to update SnipeIT, you will need to make script changes to the custom fields in the code below.
-$Snipe = @{
-    Url = "";
-    Token = "";
-    DefStatusID = 8;
-    WorkstationCatID = 12;
-    ServerCatID = 8;
-    FieldSetID = 3;
-}
-
-# Array of Software that should be checked for license/version
-$SoftwareChecklist = @(
-    ''
-    ''
-    ''
-    ''
-    ''
-);
-
-# Array of Room Number that should power on daily.
-# This will be set in the Bios using Dell Bios Provider
-$DailyPowerOnList = @(
-    ''
-);
-
+param (
+    [Object]$ConfigFile=''
+)
 
 #####################################################################################################################################
 # Static Variables 
