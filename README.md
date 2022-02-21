@@ -3,7 +3,7 @@ A script to compile an assets information and update SnipeIT inventory system.
 
 Features:
 - Added/Removed Software Alerting. Checks all software, even user profile installed software.
-- Significant Configuration Change Alerting. A signifcant change" is configured as a change in:
+- Significant Configuration Change Alerting. A "significant change" is configured as a change in:
     - DeviceName, IpAddress, MacAddress, NetworkAdapters, CPU, RAM_Installed, Drives, DHCP, OS, Bios, LocalAdmins, RemoteUsers, Graphics, Webcam
 - Reports all data
 
