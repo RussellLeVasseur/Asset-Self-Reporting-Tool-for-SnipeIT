@@ -2,11 +2,10 @@
 # Configs
 #####################################################################################################################################
 
-
 # This script creates directories a Directory Structure for Year and Month.
 $LogFileDirectory = "";
 
-# Creates and Stores Data in an Excel Spreadsheet
+# Creates and Stores Data in an Excel CSV
 $CsvFilePath = "";
 
 # Send Emails when Critical Data has seen an Update or when new Assets report
@@ -35,21 +34,17 @@ $Snipe = @{
 
 # Array of Software that should be checked for license/version
 $SoftwareChecklist = @(
-    'Stata'
-    'SAS 9'
-    'SPSS'
-    'HLM'
-    'EndNote'
-    'ArcGIS'
-    'Stat/Transfer'
-    'Papers'
-    'Nvivo'
-    'MPlus'
+    ''
+    ''
+    ''
+    ''
+    ''
 );
 
 # Array of Room Number that should power on daily.
+# This will be set in the Bios using Dell Bios Provider
 $DailyPowerOnList = @(
-
+    ''
 );
 
 
