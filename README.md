@@ -17,7 +17,8 @@ A script to compile an assets information and update SnipeIT inventory system.
 - Create Custom Fields in SnipeIT for each data point:
     - Mac Address, CPU, RAM, Operating System, IP Address, Bios, Last Reported, Graphics, Boot Drive, Internal Media, External Media, Licensed Software, Remote Desktop Users, Applied Updates, Network Adapters
     - You will need to get the SnipeIT custom field value for each of thsoe custom fields in order to fill out the fields in the config file. 
-
+- In order to run the script, you have to include the parameter `-Config` with the location of the config file. Example:
+        `Powershell.exe -Command "\\path\to\ReportAssetDataToSnipeIT.ps1 -ConfigFile \\path\to\selfReportConfig.json""`
 ## Recommendations:
 - Require all powershell scripts to be signed in your domain environment. Set through Group Policy.
 - Sign this script with an organization code signing certificate that is pushed to all domain assets via GPO.
