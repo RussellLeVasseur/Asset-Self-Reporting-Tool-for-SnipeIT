@@ -1,5 +1,6 @@
 //You must remove ALL comments from this JSON or it WILL fail. You can verify the JSON with https://jsonlint.com/
 {
+	"LocalFileDir": "\\\\path\\to\\localDirectory",
 	"LogFileDir": "\\\\path\\to\\logFileDirectory",
 	"RecordFileDir": "\\\\path\\to\\recordFileDirectory",
 
