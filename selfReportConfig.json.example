@@ -48,23 +48,6 @@
 		"field_AppliedUpdates": "_snipeit_applied_updates_22",
 		"field_NetworkAdapters": "_snipeit_network_adapters_24"
 	},
-  // This is a list of software you want the script to check for and show as installed in SnipeIT. I use it to monitor licensed software or software that shouldnt be installed.
-	// You can use wildcard * anywhere in the names that powershell allows.
-  "SoftwareChecklist": [
-		"Stata*",
-		"SAS 9*",
-		"IBM SPSS Statistics*",
-		"HLM*",
-		"EndNote*",
-		"ArcGIS*",
-		"Stat/Transfer*",
-		"Nvivo*",
-		"MPlus*",
-		"Dropbox*",
-		"Box*",
-		"Mendeley*",
-		"Zotero*"
-	],
 
   // I use this to configure assets with this location in their names to power on every weekday instead of once per week
 	"DailyPowerOnList": [
