@@ -1,5 +1,5 @@
 param (
-    [Object]$ConfigFile='\\fs01.criminology.fsu.edu\IT\Scripts\AssetSelfReporting\AssetSelfReporter.json'
+    [Object]$ConfigFile=''
 )
 
 Clear-Host;
