@@ -17,7 +17,13 @@ Remove-Variable -Name Config -ErrorAction 'SilentlyContinue';
 ########################################################################################################################################################################################################
 # Static Variables 
 ########################################################################################################################################################################################################
-If (!$ConfigFile) { Exit 1; }
+If (!$ConfigFile) { 
+    Write-Error "You did not provide a config file!";
+    Write-Error "Use the flag '-ConfigFile' and provide a completed config."
+    Write-Error "Exiting..."
+    Start-Sleep -Seconds 10; Exit 1; 
+}
+
 $Config = (Get-Content $ConfigFile) | ConvertFrom-Json;
 
 $EmailParams = @{
