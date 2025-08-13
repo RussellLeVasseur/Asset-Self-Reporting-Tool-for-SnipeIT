@@ -169,6 +169,30 @@ $CustomValues = @{};
 $UUID = (Get-WmiObject -Class Win32_ComputerSystemProduct).UUID
 $DataHashTable.Add('UUID', $UUID);
 
+$BitLockerRaw = Manage-BDE -Status | Out-String
+$BitLockerVersionLine = $BitLockerRaw -split "`r?`n" | Where-Object {$_ -match 'BitLocker Version:'}
+$BitLockerVersion = $BitLockerVersionLine -replace 'BitLocker Version:\s*',''
+$DataHashTable.Add('BitLockerVersion', $BitLockerVersion);
+
+$BitLockerLines = $BitLockerRaw -split "`r?`n" | Where-Object {
+    $_ -match 'Conversion Status:' -or
+    $_ -match 'Percentage Encrypted:' -or
+    $_ -match 'Encryption Method:' -or
+    $_ -match 'Protection Status:'
+}
+$BitLockerBDE = $BitLockerLines -join "`n"
+
+$BitLockerVolRaw = Get-BitLockerVolume | ForEach-Object {
+    $mount = $_.MountPoint
+    $_.KeyProtector | ForEach-Object {
+        "Drive: $mount | KeyProtectorId: $($_.KeyProtectorId) | KeyProtectorType: $($_.KeyProtectorType)"
+    }
+}
+$BitLockerVolume = $BitLockerVolRaw -join "`n"
+$BitLockerSummary = ($BitLockerBDE, $BitLockerVolume) -join "`n"
+$DataHashTable.Add('BitLockerSummary', $BitLockerSummary);
+
+
 ########################################################################################################################################################################################################
 # Functions
 ########################################################################################################################################################################################################
@@ -836,6 +860,8 @@ $CustomValues.Add('_snipeit_operating_system_build_6', $DataHashTable['Build']);
 $CustomValues.Add('_snipeit_windows_version_10', $DataHashTable['WindowsVersion']);
 $CustomValues.Add('_snipeit_sku_7', $DataHashTable['SKU']);
 $CustomValues.Add('_snipeit_uuid_35', $DataHashTable['UUID']);
+$CustomValues.Add('_snipeit_bitlocker_version_36', $DataHashTable['BitLockerVersion']);
+$CustomValues.Add('_snipeit_bitlocker_summary_38', $DataHashTable['BitLockerSummary']);
 $CustomValues.Add('_snipeit_bios_windows_license_key_8', 
 $DataHashTable['BIOSWindowsLicenseKey']);
 $NextAuditDate = Get-Date;
