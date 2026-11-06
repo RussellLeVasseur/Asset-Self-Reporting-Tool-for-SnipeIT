@@ -120,6 +120,7 @@ Invoke-ScriptAnalyzer -Path ./AssetSelfReport.ps1 -Severity Error,Warning
 - **Linux/macOS:** PowerShell Core is available and can be used for syntax checking only
 - **Limitation:** Script requires Windows-specific WMI classes, so functional testing requires Windows
 - **Mock Testing:** Not practical due to heavy Windows API dependencies
+- **Pester tests:** `tests/` holds Pester 5 tests for pure functions, which are parsed out of `AssetSelfReport.ps1` so the script itself never runs. Run them in a container: `docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/powershell:latest pwsh -NoProfile -Command "Install-Module Pester -MinimumVersion 5.0 -Force -Scope CurrentUser; Invoke-Pester ./tests -Output Detailed"`. Keep new logic in small pure functions so it can be tested this way, and add a test for each one.
 
 ### Known Validation Issues
 1. **Platform Dependency:** Script will fail on non-Windows systems at runtime (WMI classes unavailable)

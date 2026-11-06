@@ -84,6 +84,55 @@ Fieldsets: Computers
 
 ---
 
+### Field 93: Monitors
+```
+Field Name: Monitors
+DB Field: _snipeit_monitors_93
+Field Type: Text
+Format: Single Line Text
+Help Text: Connected monitors (manufacturer code, model, serial)
+Required: No
+Fieldsets: Computers
+```
+
+**Example Value:**
+- `DEL DELL U2723QE [ABC123]; SAM S24F350 [H4ZM]`
+
+---
+
+### Field 94: Display Resolution
+```
+Field Name: Display Resolution
+DB Field: _snipeit_display_resolution_94
+Field Type: Textarea
+Format: Multi-line Text
+Help Text: Per display: resolution, Windows scaling, usable space and native mode. LOW-RES / UNDER-1080P flag problems.
+Required: No
+Fieldsets: Computers
+```
+
+Snipe-IT builds the DB field name from the field name and its ID. If the new field is not given ID 94, change `_snipeit_display_resolution_94` in `AssetSelfReport.ps1` to match.
+
+**Example Value:**
+```
+DEL DELL U2723QE [ABC123]: 1920x1080 @100% = 1920x1080 usable (native 3840x2160) primary LOW-RES
+SAM S24F350 [H4ZM]: 1920x1080 @? (native)
+```
+
+**Format:** `<monitor>: <resolution> @<scaling> = <usable space> usable (native <mode>) [primary] [flags]`
+- `(native)` means the display is at its native mode; `(native ?)` means the monitor did not report one.
+- `@?` means scaling is unknown: nobody was signed in, the display is not the primary, or the display layout changed after the user signed in (e.g. they docked). Windows only records an absolute scaling value for the primary display, at sign-in.
+- `Display N` is used instead of the monitor name when the display can't be matched to a monitor.
+- `Unknown` means the data could not be read; the reason is in the script log.
+
+**Flags:**
+- `LOW-RES` - running below the panel's native resolution (e.g. a 4K panel at 1920x1080)
+- `UNDER-1080P` - usable space (resolution divided by scaling) is below 1920x1080, the minimum our systems are designed for
+
+Search Snipe-IT for `LOW-RES` or `UNDER-1080P` to list affected machines. The values reflect the newest display layout Windows saved, so a laptop that was docked last will show its docked layout.
+
+---
+
 ## How to Add These Fields in Snipe-IT
 
 1. Log in as administrator
@@ -107,7 +156,9 @@ Fieldsets: Computers
 
 The following field numbers are already in use (as of this implementation):
 - Fields 1-86: Various existing fields (see complete list below)
-- Fields 87-90: **NEW** - Secure Boot, BIOS information, and Script Version (this implementation)
+- Fields 87-90: Secure Boot, BIOS information, and Script Version
+- Fields 91-92: Secure Boot certificate expiry date and compliance
+- Fields 93-94: Monitors and Display Resolution
 
 ### Complete List of Existing Custom Fields (Fields 1-86)
 

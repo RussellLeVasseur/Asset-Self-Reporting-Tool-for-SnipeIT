@@ -9,6 +9,11 @@ Releases are managed by incrementing the $ScriptVersion value as part of your pu
 
 ## Recent Updates
 
+### Display Resolution (Field 94)
+The script reports each display's resolution, Windows scaling, the usable space that leaves, and the panel's native mode. Two flags show machines that will struggle with systems designed for 1080p: `LOW-RES` (a panel running below its native resolution) and `UNDER-1080P` (usable space below 1920x1080). Scaling is only known for the primary display while a user is signed in.
+
+See [SNIPEIT_FIELDS_REFERENCE.md](SNIPEIT_FIELDS_REFERENCE.md) for the field definition and value format.
+
 ### Script Version Tracking
 The script now reports its own version number to Snipe-IT, allowing you to track which version of the asset collection script last reported data for each asset. This helps with troubleshooting and ensuring all systems are running the latest version.
 

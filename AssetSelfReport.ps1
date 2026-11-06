@@ -70,7 +70,7 @@ $OldPwdFile = $Config.DellBios.OldPwdFile;
 $NewPwdFile = $Config.DellBios.NewPwdFile;
 
 # Script Version
-$ScriptVersion = "1.9";
+$ScriptVersion = "1.10";
 
 $StartTime = Get-Date;
 $Today = Get-Date -UFormat "%d-%b-%Y";
@@ -626,13 +626,16 @@ $DataHashTable.Add('WindowsUILanguage', $UILanguage);
 #Get Monitor Information
 $MonitorData = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID
 
-$MonitorInfo = ($MonitorData | ForEach-Object {
-    $Manufacturer = ($_.ManufacturerName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
-    $Model = ($_.UserFriendlyName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
-    $Serial = ($_.SerialNumberID | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
-
+# "DEL DELL U2723QE [ABC123]" from a WmiMonitorID instance; also used by the Display Resolution section.
+function Get-MonitorName {
+    param([Object] $Monitor)
+    $Manufacturer = ($Monitor.ManufacturerName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
+    $Model = ($Monitor.UserFriendlyName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
+    $Serial = ($Monitor.SerialNumberID | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
     "$Manufacturer $Model [$Serial]"
-}) -join "; "
+}
+
+$MonitorInfo = ($MonitorData | ForEach-Object { Get-MonitorName -Monitor $_ }) -join "; "
 $DataHashTable.Add('MonitorInfo', $MonitorInfo);
 ########################################################################################################################################################################################################
 # Functions
@@ -1178,6 +1181,230 @@ Switch ($true) {
     default { $DataHashTable.Add('Graphics', ''); }
 }
 
+########################################################################################################################################################################################################
+# Display Resolution, Scaling and Usable Space
+########################################################################################################################################################################################################
+# One line per active display, e.g.
+#   DEL DELL U2723QE [ABC123]: 1920x1080 @100% = 1920x1080 usable (native 3840x2160) primary LOW-RES
+# LOW-RES     = desktop resolution is below the panel's native mode.
+# UNDER-1080P = usable space (resolution divided by Windows scaling) is below 1920x1080.
+# The script runs as SYSTEM, which cannot see the user's desktop, so:
+#   - native mode comes from each monitor's EDID (WmiMonitorListedSupportedSourceModes)
+#   - current mode comes from the newest layout Windows saved under GraphicsDrivers\Configuration
+#   - scaling comes from the signed-in user's AppliedDPI, which Windows records for the primary display at sign-in;
+#     other displays show "@?" (their stored scaling is an offset from an undocumented "recommended" value), and so
+#     does the primary if the layout changed after sign-in.
+# The registry layout details are community-documented, not Microsoft-documented; the script log records which layout was used.
+#WriteLog -Log "Gathering Display Resolution Information...";
+$MinUsableWidth = 1920;
+$MinUsableHeight = 1080;
+
+# "DISPLAY\DEL40F5\5&2b1b1c0b&0&UID4357_0" -> "DEL40F5"
+function Get-PnpCodeFromInstanceName {
+    param([String] $InstanceName)
+    $Parts = $InstanceName -split '\\';
+    If ($Parts.Count -ge 2) { return $Parts[1].ToUpper(); }
+    return '';
+}
+
+# The monitor's preferred (native) mode from its EDID, or $null if it doesn't report one.
+function Get-NativeDisplayMode {
+    param([Object] $SourceModes)
+    If (-NOT $SourceModes -OR -NOT $SourceModes.MonitorSourceModes) { return $null; }
+    $Modes = @($SourceModes.MonitorSourceModes);
+    $Index = [int]$SourceModes.PreferredMonitorSourceModeIndex;
+    If ($Index -lt 0 -OR $Index -ge $Modes.Count) { return $null; }
+    $Mode = $Modes[$Index];
+    If (-NOT $Mode.HorizontalActivePixels -OR -NOT $Mode.VerticalActivePixels) { return $null; }
+    return [PSCustomObject]@{ Width = [int]$Mode.HorizontalActivePixels; Height = [int]$Mode.VerticalActivePixels };
+}
+
+# A layout's SetId names one EDID-based ID per display, each starting with the 3-letter manufacturer and 4-hex
+# product code that WmiMonitorID's InstanceName also uses. Returns those codes in order.
+function Get-PnpCodesFromSetId {
+    param([String] $SetId)
+    return @([regex]::Matches($SetId, '(?i)(?<![A-Z0-9])[A-Z]{3}[0-9A-F]{4}') | ForEach-Object { $_.Value.ToUpper() });
+}
+
+# AppliedDPI 96 = 100%, 120 = 125%, 144 = 150% ...
+function ConvertTo-ScalePercent {
+    param([Object] $Dpi)
+    If ($null -eq $Dpi -OR [int]$Dpi -le 0) { return $null; }
+    return [int][math]::Round([int]$Dpi * 100 / 96);
+}
+
+function Format-DisplayLine {
+    param(
+        [String] $Name, [int] $Width, [int] $Height, [Object] $ScalePercent, [Object] $Native, [Bool] $IsPrimary,
+        [int] $MinWidth = 1920, [int] $MinHeight = 1080
+    )
+    $Line = "$($Name): $($Width)x$($Height)";
+    $Flags = @();
+    If ($ScalePercent) {
+        $UsableWidth = [int][math]::Floor($Width * 100 / $ScalePercent);
+        $UsableHeight = [int][math]::Floor($Height * 100 / $ScalePercent);
+        $Line += " @$($ScalePercent)% = $($UsableWidth)x$($UsableHeight) usable";
+    } Else {
+        # Scaling unknown: the resolution itself is the most usable space there can be.
+        $UsableWidth = $Width;
+        $UsableHeight = $Height;
+        $Line += " @?";
+    }
+    If ($Native) {
+        # Compare long side with long side so a portrait-rotated panel isn't flagged for being rotated.
+        $CurrentLong = [math]::Max($Width, $Height); $CurrentShort = [math]::Min($Width, $Height);
+        $NativeLong = [math]::Max($Native.Width, $Native.Height); $NativeShort = [math]::Min($Native.Width, $Native.Height);
+        If ($CurrentLong -lt $NativeLong -OR $CurrentShort -lt $NativeShort) {
+            $Line += " (native $($Native.Width)x$($Native.Height))";
+            $Flags += 'LOW-RES';
+        } Else {
+            $Line += " (native)";
+        }
+    } Else {
+        $Line += " (native ?)";
+    }
+    If ($IsPrimary) { $Line += " primary"; }
+    If ($UsableWidth -lt $MinWidth -OR $UsableHeight -lt $MinHeight) { $Flags += 'UNDER-1080P'; }
+    If ($Flags.Count -gt 0) { $Line += " $($Flags -join ' ')"; }
+    return $Line;
+}
+
+# $Displays: the newest layout's displays in order (Width, Height, X, Y).
+# $Monitors: PnpCode, Name, Native for each connected monitor.
+# Displays are matched to monitors through the layout's SetId; if that can't be done, lines are named "Display N".
+function Format-DisplayReport {
+    param(
+        [Object[]] $Displays, [Object[]] $Monitors, [String] $SetId, [Object] $PrimaryScalePercent,
+        [int] $MinWidth = 1920, [int] $MinHeight = 1080
+    )
+    # @() so a single-display SetId stays an array (otherwise $Codes[0] is its first character).
+    $Codes = @(Get-PnpCodesFromSetId -SetId $SetId);
+    $CanMatch = ($Codes.Count -eq $Displays.Count);
+    $Taken = @{};
+    $Lines = for ($i = 0; $i -lt $Displays.Count; $i++) {
+        $Display = $Displays[$i];
+        $Monitor = $null;
+        If ($CanMatch) {
+            for ($m = 0; $m -lt $Monitors.Count; $m++) {
+                If (-NOT $Taken.ContainsKey($m) -AND $Monitors[$m].PnpCode -eq $Codes[$i]) { $Monitor = $Monitors[$m]; $Taken[$m] = $true; break; }
+            }
+        }
+        $Name = If ($Monitor -AND "$($Monitor.Name)" -match '[A-Za-z0-9]') { "$($Monitor.Name)".Trim() } Else { "Display $($i + 1)" };
+        $Native = If ($Monitor) { $Monitor.Native } Else { $null };
+        $IsPrimary = ($Display.X -eq 0 -AND $Display.Y -eq 0);
+        $Scale = If ($IsPrimary) { $PrimaryScalePercent } Else { $null };
+        Format-DisplayLine -Name $Name -Width $Display.Width -Height $Display.Height -ScalePercent $Scale -Native $Native -IsPrimary $IsPrimary -MinWidth $MinWidth -MinHeight $MinHeight;
+    }
+    return (@($Lines) -join "`n");
+}
+
+# The layout in use now: the newest one with a timestamp and displays. Layouts with no real monitor (NOEDID_, SIMULATED_),
+# e.g. saved while monitors were asleep, are only used if there is nothing else.
+function Select-CurrentDisplayLayout {
+    param([Object[]] $Layouts)
+    $MaxFileTime = [uint64][DateTime]::MaxValue.ToFileTimeUtc();
+    $Usable = @($Layouts | Where-Object { $_.Timestamp -gt 0 -AND $_.Timestamp -le $MaxFileTime -AND @($_.Displays).Count -gt 0 });
+    $Real = @($Usable | Where-Object { $_.SetId -notmatch 'NOEDID|SIMULATED' });
+    $Candidates = If ($Real.Count -gt 0) { $Real } Else { $Usable };
+    return ($Candidates | Sort-Object -Property Timestamp -Descending | Select-Object -First 1);
+}
+
+# AppliedDPI is the scaling at sign-in. If the display layout changed after sign-in (e.g. the user docked), it may
+# belong to a different primary display, so report it only when the layout is older than the sign-in.
+function Get-PrimaryScaleForLayout {
+    param([Object] $ScalePercent, [Object] $SignedInUtc, [uint64] $LayoutTimestamp)
+    If (-NOT $ScalePercent -OR -NOT $SignedInUtc -OR $LayoutTimestamp -eq 0) { return $null; }
+    If ([DateTime]::FromFileTimeUtc([int64]$LayoutTimestamp) -gt $SignedInUtc) { return $null; }
+    return $ScalePercent;
+}
+
+# Every saved layout under GraphicsDrivers\Configuration: its SetId, Timestamp (FILETIME) and displays in order.
+function Read-DisplayLayouts {
+    $Root = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration';
+    Get-ChildItem -Path $Root -ErrorAction Stop | ForEach-Object {
+        $LayoutKey = $_;
+        $Layout = Get-ItemProperty -Path $LayoutKey.PSPath -ErrorAction Stop;
+        $Stamp = [uint64]0;
+        If ($Layout.Timestamp -is [byte[]] -AND $Layout.Timestamp.Length -ge 8) { $Stamp = [BitConverter]::ToUInt64($Layout.Timestamp, 0); }
+        ElseIf ($null -ne $Layout.Timestamp) { $Stamp = [uint64]$Layout.Timestamp; }
+        $SetId = If ($Layout.SetId) { $Layout.SetId } Else { ($LayoutKey.PSChildName -split '\^')[0] };
+        # Each numbered subkey is a desktop surface; each of its numbered subkeys is a display showing it.
+        $LayoutDisplays = @(Get-ChildItem -Path $LayoutKey.PSPath -ErrorAction Stop | Sort-Object PSChildName | ForEach-Object {
+            $Surface = Get-ItemProperty -Path $_.PSPath -ErrorAction Stop;
+            Get-ChildItem -Path $_.PSPath -ErrorAction Stop | Sort-Object PSChildName | ForEach-Object {
+                $Target = Get-ItemProperty -Path $_.PSPath -ErrorAction Stop;
+                $Width = If ($Target.'PrimSurfSize.cx') { $Target.'PrimSurfSize.cx' } Else { $Surface.'PrimSurfSize.cx' };
+                $Height = If ($Target.'PrimSurfSize.cy') { $Target.'PrimSurfSize.cy' } Else { $Surface.'PrimSurfSize.cy' };
+                If ($Width -AND $Height) {
+                    [PSCustomObject]@{ Width = [int]$Width; Height = [int]$Height; X = [int]$Surface.'Position.cx'; Y = [int]$Surface.'Position.cy' };
+                }
+            }
+        });
+        [PSCustomObject]@{ SetId = $SetId; Timestamp = $Stamp; Displays = $LayoutDisplays };
+    }
+}
+
+# The single signed-in user's sign-in scaling (ScalePercent) and sign-in time (SignedInUtc, from their first explorer.exe),
+# or $null if nobody, or more than one user, is signed in. If explorer.exe was restarted, SignedInUtc is the restart time.
+function Get-SignedInUserScale {
+    $Shells = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | ForEach-Object {
+        [PSCustomObject]@{ Sid = (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid; Started = $_.CreationDate }
+    } | Where-Object { $_.Sid });
+    $Sids = @($Shells.Sid | Sort-Object -Unique);
+    If ($Sids.Count -ne 1) {
+        If ($Sids.Count -gt 1) { WriteLog -Log "[Displays] $($Sids.Count) users signed in; scaling not reported."; }
+        return $null;
+    }
+    $WindowMetrics = "Registry::HKEY_USERS\$($Sids[0])\Control Panel\Desktop\WindowMetrics";
+    If (-NOT (Test-Path -Path $WindowMetrics)) { WriteLog -Log "[Displays] No WindowMetrics key for signed-in user $($Sids[0]); scaling not reported."; return $null; }
+    $SignedIn = ($Shells | Sort-Object -Property Started | Select-Object -First 1).Started;
+    return [PSCustomObject]@{
+        ScalePercent = ConvertTo-ScalePercent -Dpi (Get-ItemProperty -Path $WindowMetrics -ErrorAction Stop).AppliedDPI;
+        SignedInUtc  = If ($SignedIn) { ([DateTime]$SignedIn).ToUniversalTime() } Else { $null };
+    };
+}
+
+$DisplayResolution = 'Unknown';
+Try {
+    $SourceModes = @();
+    If (@($MonitorData).Count -gt 0) {
+        Try {
+            $SourceModes = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction Stop);
+        } Catch { WriteLog -Log "[ERROR] [Displays] Could not read monitor native modes." -Data $_; }
+    }
+    $Monitors = @($MonitorData | ForEach-Object {
+        $Instance = $_.InstanceName;
+        [PSCustomObject]@{
+            PnpCode = Get-PnpCodeFromInstanceName -InstanceName $Instance;
+            Name    = Get-MonitorName -Monitor $_;
+            Native  = Get-NativeDisplayMode -SourceModes ($SourceModes | Where-Object { $_.InstanceName -eq $Instance } | Select-Object -First 1);
+        }
+    });
+    $CurrentLayout = Select-CurrentDisplayLayout -Layouts @(Read-DisplayLayouts);
+    If ($CurrentLayout) {
+        WriteLog -Log "[Displays] Using layout $($CurrentLayout.SetId) saved $([DateTime]::FromFileTimeUtc([int64]$CurrentLayout.Timestamp).ToString('u'))";
+        $PrimaryScale = $null;
+        Try {
+            $UserScale = Get-SignedInUserScale;
+            If ($UserScale) {
+                If (-NOT $UserScale.ScalePercent) { WriteLog -Log "[Displays] Signed-in user has no AppliedDPI; scaling not reported."; }
+                ElseIf (-NOT $UserScale.SignedInUtc) { WriteLog -Log "[Displays] Sign-in time unknown; scaling not reported."; }
+                Else {
+                    $PrimaryScale = Get-PrimaryScaleForLayout -ScalePercent $UserScale.ScalePercent -SignedInUtc $UserScale.SignedInUtc -LayoutTimestamp $CurrentLayout.Timestamp;
+                    If (-NOT $PrimaryScale) { WriteLog -Log "[Displays] Display layout changed after sign-in; scaling not reported."; }
+                }
+            }
+        } Catch { WriteLog -Log "[ERROR] [Displays] Could not read the signed-in user's scaling." -Data $_; }
+        $DisplayResolution = Format-DisplayReport -Displays $CurrentLayout.Displays -Monitors $Monitors -SetId $CurrentLayout.SetId -PrimaryScalePercent $PrimaryScale -MinWidth $MinUsableWidth -MinHeight $MinUsableHeight;
+        If ($DisplayResolution -match '(?m)^Display \d+:') {
+            WriteLog -Log "[Displays] Some displays could not be matched to a monitor (layout $($CurrentLayout.SetId); monitors: $(@($Monitors.PnpCode) -join ', ')).";
+        }
+    } Else {
+        WriteLog -Log "[Displays] No usable saved display layout found.";
+    }
+} Catch { WriteLog -Log "[ERROR] [Displays] Could not build the display resolution report." -Data $_; }
+$DataHashTable.Add('DisplayResolution', $DisplayResolution);
+
 
 ########################################################################################################################################################################################################
 # RAM/Memory
@@ -1397,6 +1624,7 @@ $CustomValues.Add('_snipeit_secure_boot_cert_expiry_date_91', $DataHashTable['Se
 # TEXT field in Snipe-IT: "Secure Boot Compliance"
 $CustomValues.Add('_snipeit_secure_boot_compliance_92', $DataHashTable['SecureBootCompliance']);
 $CustomValues.Add('_snipeit_monitors_93', $DataHashTable['MonitorInfo']);
+$CustomValues.Add('_snipeit_display_resolution_94', $DataHashTable['DisplayResolution']);
 
 
 $NextAuditDate = Get-Date;
